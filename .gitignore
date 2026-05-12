@@ -22,6 +22,7 @@ Thumbs.db
 .claude/cache/
 .claude/.tmp/
 .claude/audit.log
+.claude/scheduled_tasks.lock
 
 # MCP credentials (si .mcp.json un jour avec secrets)
 .mcp.local.json
