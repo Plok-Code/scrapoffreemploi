@@ -141,6 +141,7 @@ def page_companies(
     stats = queries.get_company_stats()
     priorities = queries.list_company_priorities()
     cities = queries.list_company_cities()
+    target_cities = queries.count_companies_per_target_city()
     return templates.TemplateResponse(
         "companies.html",
         {
@@ -149,6 +150,7 @@ def page_companies(
             "stats": stats,
             "priorities": priorities,
             "cities": cities,
+            "target_cities": target_cities,
             "statuses": VALID_COMPANY_STATUSES,
             "filters": {
                 "search": search,
@@ -298,7 +300,12 @@ def _run_full_scrape_bg(max_pages: int) -> None:
     })
     try:
         _SCRAPE_STATE["step"] = "cleanup (ping URLs existantes)"
-        result = run_full_scrape(max_pages=max_pages, do_cleanup=True, do_auto_score=True)
+        result = run_full_scrape(
+            max_pages=max_pages,
+            do_cleanup=True,
+            do_auto_score=True,
+            do_portals=True,
+        )
         cleanup = result.cleanup
         per_source_summary = {
             src: {
@@ -315,6 +322,8 @@ def _run_full_scrape_bg(max_pages: int) -> None:
             "total_duplicates": sum(r.total_duplicates for r in result.per_source.values()),
             "deleted_dead": cleanup.deleted if cleanup else 0,
             "archived_dead": cleanup.archived if cleanup else 0,
+            "portals_attempted": result.portals_attempted,
+            "portals_offers_inserted": result.portals_offers_inserted,
             "scoring_applied": result.scoring_applied,
             "per_source": per_source_summary,
         })

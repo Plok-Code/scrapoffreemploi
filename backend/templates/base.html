@@ -117,6 +117,13 @@
                             if (json.archived_dead !== undefined && json.archived_dead > 0) {
                                 html += '• 📦 Archivées (URL morte + avec statut) : ' + json.archived_dead + '<br>';
                             }
+                            if (json.portals_attempted !== undefined && json.portals_attempted > 0) {
+                                html += '• 🏢 Portails entreprises scrapés : ' + json.portals_attempted;
+                                if (json.portals_offers_inserted !== undefined) {
+                                    html += ' (' + json.portals_offers_inserted + ' offres ins.)';
+                                }
+                                html += '<br>';
+                            }
                             if (json.scoring_applied !== undefined && json.scoring_applied > 0) {
                                 html += '• 🎯 Scoring auto appliqué : ' + json.scoring_applied + ' offres<br>';
                             }

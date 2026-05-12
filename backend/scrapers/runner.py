@@ -590,6 +590,8 @@ def cleanup_dead_unstatused(
 class FullScrapeResult:
     cleanup: CleanupResult | None
     per_source: dict[str, ScrapeResult]
+    portals_attempted: int
+    portals_offers_inserted: int
     total_new: int
     scoring_applied: int
 
@@ -600,19 +602,20 @@ def run_full_scrape(
     max_pages: int = 5,
     do_cleanup: bool = True,
     do_auto_score: bool = True,
+    do_portals: bool = True,
 ) -> FullScrapeResult:
-    """Lance un scrape multi-source complet : cleanup → scrape × N → scoring auto.
+    """Lance un scrape multi-source complet : cleanup → job boards → portails entreprises → scoring auto.
 
     Args:
-        sources: liste des scrapers à lancer. None = tous les disponibles.
+        sources: liste des scrapers de job boards. None = tous (FT+WTTJ+HW).
         max_pages: pages max par mot-clé pour chaque source.
-        do_cleanup: si True, ping URLs existantes et supprime celles mortes+sans statut.
+        do_cleanup: si True, ping URLs existantes ; supprime celles mortes+sans statut, archive les autres.
         do_auto_score: si True, lance le heuristic scorer sur les nouvelles offres.
+        do_portals: si True, scrape aussi les portails de chaque target_company avec source_url.
     """
     from backend.scrapers.registry import list_scrapers
 
     if sources is None:
-        # On ne lance que les sources qui ont un vrai fetch_list (pas generic)
         sources = [s for s in list_scrapers() if s != "generic"]
 
     cleanup_result: CleanupResult | None = None
@@ -627,13 +630,28 @@ def run_full_scrape(
             per_source[src] = r
             total_new += r.total_new
         except Exception as e:  # noqa: BLE001
-            # On enregistre l'erreur mais on continue avec les autres sources
             per_source[src] = ScrapeResult(
                 source=src, total_fetched=0, total_new=0,
                 total_duplicates=0, batch_file=None, new_ids=[],
             )
             queries.record_scrape_run(
                 sources=src, total_fetched=0, total_new=0,
+                total_duplicates=0, error=str(e),
+            )
+
+    # Scrape des portails entreprises (Workable / Lever / Workday / best-effort)
+    portals_attempted = 0
+    portals_inserted = 0
+    if do_portals:
+        from backend.scrapers.company_portals import scrape_target_company_portals
+        try:
+            pr = scrape_target_company_portals(sleep_between=0.8)
+            portals_attempted = pr.portals_attempted
+            portals_inserted = pr.new_offers_inserted
+            total_new += pr.new_offers_inserted
+        except Exception as e:  # noqa: BLE001
+            queries.record_scrape_run(
+                sources="portails-entreprises", total_fetched=0, total_new=0,
                 total_duplicates=0, error=str(e),
             )
 
@@ -646,6 +664,8 @@ def run_full_scrape(
     return FullScrapeResult(
         cleanup=cleanup_result,
         per_source=per_source,
+        portals_attempted=portals_attempted,
+        portals_offers_inserted=portals_inserted,
         total_new=total_new,
         scoring_applied=scoring_applied,
     )

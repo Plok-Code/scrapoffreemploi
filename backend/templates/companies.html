@@ -29,22 +29,42 @@
     {% endif %}
 {%- endmacro %}
 
+{% macro contact_method_badge(channel, email) -%}
+    {%- set channel_lower = (channel or '')|lower -%}
+    {%- if email and ('@' in email) -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✉ Email</span>
+        <a href="mailto:{{ email }}" class="text-xs text-blue-600 hover:underline ml-1">{{ email }}</a>
+    {%- elif 'portail' in channel_lower or 'workday' in channel_lower or 'taleo' in channel_lower or 'careers' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-50 text-blue-700 border border-blue-200">🔗 Portail</span>
+    {%- elif 'spontan' in channel_lower or 'cv' in channel_lower or 'physique' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-50 text-purple-700 border border-purple-200">📋 Spontané</span>
+    {%- elif 'linkedin' in channel_lower or 'talent' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-cyan-50 text-cyan-700 border border-cyan-200">👥 LinkedIn/Réseau</span>
+    {%- else -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-50 text-slate-600 border border-slate-200">{{ channel or '—' }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
 {% block content %}
 <div class="mb-4 flex items-start justify-between gap-4">
     <div>
         <h1 class="text-xl font-semibold">Entreprises cibles — candidature spontanée</h1>
         <p class="text-sm text-slate-600 mt-1">
-            Entreprises à contacter directement (avec ou sans portail).
-            Xlsx historique + enrichissement via offres scrapées.
+            Entreprises où postuler dans tes villes cibles. Chaque ligne indique le portail et comment contacter (portail, email, spontané, réseau).
         </p>
     </div>
-    <!-- Bouton d'import : extraire entreprises Toulouse depuis offres scrapées -->
+    <!-- Bouton d'import : extraire entreprises depuis offres scrapées -->
     <form method="post" action="/api/companies/import-from-offers"
           class="flex items-end gap-2 text-sm">
         <div>
             <label class="block text-xs text-slate-500 mb-0.5">Importer entreprises d'une ville</label>
-            <input type="text" name="city" placeholder="Toulouse" value="Toulouse"
-                   class="px-2 py-1.5 border border-slate-300 rounded text-sm w-36" />
+            <select name="city" class="px-2 py-1.5 border border-slate-300 rounded text-sm w-36">
+                <option value="Toulouse">Toulouse</option>
+                <option value="Bordeaux">Bordeaux</option>
+                <option value="Pau">Pau</option>
+                <option value="Paris">Paris</option>
+                <option value="Nancy">Nancy</option>
+            </select>
         </div>
         <button type="submit"
                 class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium whitespace-nowrap">
@@ -81,6 +101,21 @@
     </div>
 </div>
 
+<!-- Tabs des villes cibles -->
+<div class="bg-white border border-slate-200 rounded mb-4 px-3 py-2 flex flex-wrap items-center gap-1">
+    <span class="text-xs text-slate-500 uppercase tracking-wide mr-2">Villes cibles :</span>
+    <a href="/companies"
+       class="px-3 py-1 text-sm rounded {% if not filters.city %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+        Toutes ({{ stats.total }})
+    </a>
+    {% for vc in target_cities %}
+        <a href="/companies?city={{ vc.name }}"
+           class="px-3 py-1 text-sm rounded {% if filters.city == vc.name %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+            {{ vc.name }} ({{ vc.count }})
+        </a>
+    {% endfor %}
+</div>
+
 <!-- Filtres -->
 <form method="get" action="/companies" class="bg-white border border-slate-200 rounded p-3 mb-4 flex flex-wrap gap-3 items-end">
     <div class="flex-1 min-w-48">
@@ -89,6 +124,7 @@
                class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm"
                placeholder="Ex: Airbus, banque, tech..." />
     </div>
+    <input type="hidden" name="city" value="{{ filters.city }}" />
     <div>
         <label class="block text-xs text-slate-500 mb-1">Priorité</label>
         <select name="priority" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
@@ -109,35 +145,27 @@
         </select>
     </div>
     <div>
-        <label class="block text-xs text-slate-500 mb-1">Ville</label>
-        <select name="city" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
-            <option value="">Toutes</option>
-            {% for c in cities %}
-                <option value="{{ c }}" {% if filters.city == c %}selected{% endif %}>{{ c }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div>
         <label class="block text-xs text-slate-500 mb-1">Trier par</label>
         <select name="sort" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
             <option value="priority" {% if filters.sort == "priority" %}selected{% endif %}>Priorité</option>
             <option value="name" {% if filters.sort == "name" %}selected{% endif %}>Nom</option>
             <option value="sector" {% if filters.sort == "sector" %}selected{% endif %}>Secteur</option>
+            <option value="city" {% if filters.sort == "city" %}selected{% endif %}>Ville</option>
             <option value="recent" {% if filters.sort == "recent" %}selected{% endif %}>Dernier MAJ</option>
         </select>
     </div>
     <button type="submit" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-700 text-white rounded text-sm font-medium">
         Filtrer
     </button>
-    <a href="/companies" class="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded text-sm">
+    <a href="/companies{% if filters.city %}?city={{ filters.city }}{% endif %}" class="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded text-sm">
         Reset
     </a>
 </form>
 
 <!-- Tableau -->
 <div class="bg-white border border-slate-200 rounded overflow-hidden">
-    <div class="px-3 py-2 border-b border-slate-200 text-sm text-slate-600">
-        {{ companies|length }} entreprise{% if companies|length > 1 %}s{% endif %} affichée{% if companies|length > 1 %}s{% endif %}
+    <div class="px-3 py-2 border-b border-slate-200 text-sm text-slate-600 flex items-center justify-between">
+        <span>{{ companies|length }} entreprise{% if companies|length > 1 %}s{% endif %} affichée{% if companies|length > 1 %}s{% endif %}{% if filters.city %} à {{ filters.city }}{% endif %}</span>
     </div>
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
@@ -145,11 +173,11 @@
             <tr>
                 <th class="text-left px-3 py-2 w-20">Priorité</th>
                 <th class="text-left px-3 py-2">Entreprise</th>
-                <th class="text-left px-3 py-2">Secteur</th>
-                <th class="text-left px-3 py-2">Ville</th>
-                <th class="text-left px-3 py-2">Canal de contact</th>
-                <th class="text-left px-3 py-2">Statut</th>
-                <th class="text-left px-3 py-2 w-20">Action</th>
+                <th class="text-left px-3 py-2 w-28">Ville</th>
+                <th class="text-left px-3 py-2 w-24">Portail</th>
+                <th class="text-left px-3 py-2">Comment contacter</th>
+                <th class="text-left px-3 py-2 w-24">Statut</th>
+                <th class="text-left px-3 py-2 w-16">Détail</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
@@ -157,23 +185,29 @@
             <tr class="hover:bg-slate-50">
                 <td class="px-3 py-2">{{ priority_badge(c.priority) }}</td>
                 <td class="px-3 py-2">
-                    <a href="/companies/{{ c.id }}" class="text-slate-900 hover:underline font-medium">
-                        {{ c.name }}
-                    </a>
+                    <div class="font-medium text-slate-900">{{ c.name }}</div>
+                    {% if c.sector %}<div class="text-xs text-slate-500 truncate max-w-xs">{{ c.sector }}</div>{% endif %}
                 </td>
-                <td class="px-3 py-2 text-slate-700 text-xs">{{ c.sector or "—" }}</td>
-                <td class="px-3 py-2 text-slate-600 text-xs">{{ c.city or "—" }}</td>
-                <td class="px-3 py-2 text-slate-600 text-xs max-w-md truncate">{{ c.contact_channel or "—" }}</td>
-                <td class="px-3 py-2">{{ status_badge(c.status) }}</td>
+                <td class="px-3 py-2 text-slate-700 text-xs">{{ c.city or "—" }}</td>
                 <td class="px-3 py-2">
                     {% if c.source_url %}
                         <a href="{{ c.source_url }}" target="_blank" rel="noopener"
                            class="text-xs text-blue-600 hover:underline">Portail ↗</a>
+                    {% else %}
+                        <span class="text-xs text-slate-400">—</span>
                     {% endif %}
+                </td>
+                <td class="px-3 py-2">
+                    {{ contact_method_badge(c.contact_channel, c.email) }}
+                    {% if c.contact_channel %}<div class="text-xs text-slate-500 mt-0.5 truncate max-w-md">{{ c.contact_channel }}</div>{% endif %}
+                </td>
+                <td class="px-3 py-2">{{ status_badge(c.status) }}</td>
+                <td class="px-3 py-2">
+                    <a href="/companies/{{ c.id }}" class="text-xs text-blue-600 hover:underline">Ouvrir</a>
                 </td>
             </tr>
             {% else %}
-            <tr><td colspan="7" class="text-center py-8 text-slate-400">Aucune entreprise.</td></tr>
+            <tr><td colspan="7" class="text-center py-8 text-slate-400">Aucune entreprise pour ce filtre.</td></tr>
             {% endfor %}
         </tbody>
     </table>

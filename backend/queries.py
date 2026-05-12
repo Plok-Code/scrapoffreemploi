@@ -350,6 +350,23 @@ def list_company_cities() -> list[str]:
     return [r["city"] for r in rows]
 
 
+# Villes cibles fixes du projet (5 villes utilisateur)
+TARGET_CITIES = ("Toulouse", "Bordeaux", "Pau", "Paris", "Nancy")
+
+
+def count_companies_per_target_city() -> list[dict]:
+    """Pour chaque ville cible fixe, compte les entreprises matchant (city LIKE)."""
+    results: list[dict] = []
+    with db() as conn:
+        for city in TARGET_CITIES:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM target_companies WHERE LOWER(city) LIKE ?",
+                (f"%{city.lower()}%",),
+            ).fetchone()["n"]
+            results.append({"name": city, "count": n})
+    return results
+
+
 def extract_companies_from_offers_by_city(
     *,
     city_substr: str,
