@@ -20,8 +20,15 @@
    python -c "from backend.main import app; print('OK', len(app.routes))"
    ```
 2. Si modif de queries.py : tester avec une requête réelle (`curl http://localhost:8000/`)
-3. **Mettre à jour `CHANGELOG.md`** si changement user-facing (nouvelle route, nouvelle colonne DB, nouveau template)
-4. Reporter brièvement les fichiers touchés au user
+3. **Si l'app tourne déjà** (uvicorn en background) : la redémarrer pour charger le nouveau code
+   ```powershell
+   # Kill l'ancien process puis relance
+   Get-Process python | Where-Object {$_.Id -eq <PID>} | Stop-Process -Force
+   Start-Process python -ArgumentList "-m","backend" -WorkingDirectory "<path>"
+   ```
+   Sans reload, le user voit l'ancien code et peut signaler un faux bug (`{"detail":"Not Found"}`).
+4. **Mettre à jour `CHANGELOG.md`** si changement user-facing (nouvelle route, nouvelle colonne DB, nouveau template)
+5. Reporter brièvement les fichiers touchés au user
 
 ## Quand tu doutes
 
