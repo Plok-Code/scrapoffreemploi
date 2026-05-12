@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from backend import queries
+from backend._logging import init_logging, logger
 from backend.db import init_schema
 from backend.models import (
     VALID_COMPANY_STATUSES,
@@ -16,6 +17,9 @@ from backend.models import (
     VALID_REMOTE,
     VALID_STATUSES,
 )
+
+# Init du logging dès le module import (avant tout autre log)
+init_logging(level="INFO")
 
 BASE_DIR = Path(__file__).resolve().parent
 

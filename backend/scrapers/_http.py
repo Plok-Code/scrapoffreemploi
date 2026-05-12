@@ -1,10 +1,28 @@
-"""Session HTTP partagée pour tous les scrapers."""
+"""Session HTTP partagée pour tous les scrapers.
+
+Politesse + Résilience (niveau ultra senior) :
+- User-Agent Chrome réaliste
+- Pas de brotli (httpx sans la lib `brotli` reçoit du binaire)
+- Retries avec exponential backoff via `tenacity` (4 tentatives, 2/4/8/16s)
+- Rate limiter global avec pauses aléatoires entre requêtes (anti-ban IP)
+"""
 from __future__ import annotations
 
+import random
 import time
 from contextlib import contextmanager
 
 import httpx
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception,
+    retry_if_result,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from backend._logging import logger
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -41,25 +59,92 @@ def http_client(**kwargs):
         client.close()
 
 
+# --- Rate limiter global (pauses aléatoires anti-ban) ---
+
+class RateLimiter:
+    """Rate limiter avec pauses aléatoires entre requêtes pour préserver l'IP.
+
+    Génère un délai entre `min_delay` et `max_delay` secondes (uniforme aléatoire)
+    avant chaque `acquire()`. Simule un comportement humain — un scraper qui hit
+    à intervalle régulier (1.5s pile) est trivial à détecter et bannir.
+
+    Usage :
+        rl = RateLimiter(min_delay=1.5, max_delay=3.2)
+        for url in urls:
+            rl.acquire()  # bloque jusqu'à ce que le délai soit écoulé
+            client.get(url)
+    """
+
+    def __init__(self, min_delay: float = 1.5, max_delay: float = 3.2):
+        if min_delay > max_delay:
+            raise ValueError("min_delay > max_delay")
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self._last_call: float = 0.0
+
+    def acquire(self) -> None:
+        """Bloque jusqu'à ce que le prochain délai soit OK."""
+        now = time.time()
+        target_delay = random.uniform(self.min_delay, self.max_delay)
+        elapsed = now - self._last_call
+        if elapsed < target_delay:
+            time.sleep(target_delay - elapsed)
+        self._last_call = time.time()
+
+
+# Limiter global partagé par tous les scrapers HTTP (peut être surchargé par scraper)
+DEFAULT_RATE_LIMITER = RateLimiter(min_delay=1.0, max_delay=2.5)
+
+
 def polite_sleep(seconds: float = 1.5) -> None:
-    """Sleep entre les requêtes pour être correct avec les serveurs."""
-    time.sleep(seconds)
+    """Sleep simple (DEPRECATED — préférer RateLimiter pour vraie politesse).
+
+    Conservé pour compat avec le code existant.
+    """
+    # Ajoute un peu de jitter même ici (±20%) pour pas être trop régulier
+    actual = seconds * random.uniform(0.8, 1.2)
+    time.sleep(actual)
 
 
-def get_with_retry(client: httpx.Client, url: str, *, max_retries: int = 3) -> httpx.Response:
-    """GET avec backoff exponentiel sur 429/503/timeouts."""
-    last_exc: Exception | None = None
-    for attempt in range(max_retries):
-        try:
-            resp = client.get(url)
-            if resp.status_code in (429, 503):
-                wait = 2 ** attempt * 2  # 2, 4, 8 secondes
-                time.sleep(wait)
-                continue
-            return resp
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            last_exc = e
-            time.sleep(2 ** attempt)
-    if last_exc:
-        raise last_exc
-    raise RuntimeError(f"Échec après {max_retries} tentatives : {url}")
+# --- Retries avec exponential backoff (tenacity) ---
+
+def _is_retryable_status(resp: httpx.Response) -> bool:
+    """Détermine si un status code mérite un retry (transient errors)."""
+    return resp.status_code in (429, 500, 502, 503, 504)
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    """Détermine si une exception réseau mérite un retry."""
+    return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+
+
+@retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=16),
+    retry=(
+        retry_if_exception(_is_retryable_exception)
+        | retry_if_result(_is_retryable_status)
+    ),
+    reraise=True,
+)
+def _get_with_retry_inner(client: httpx.Client, url: str) -> httpx.Response:
+    """Inner : raw GET avec retries via tenacity (2s, 4s, 8s, 16s max)."""
+    return client.get(url)
+
+
+def get_with_retry(client: httpx.Client, url: str, *, max_retries: int = 4) -> httpx.Response:
+    """GET avec retries exponential backoff (tenacity).
+
+    Args:
+        max_retries: nombre max de tentatives. Ignoré — on utilise le decorator
+            global (4 tentatives = 1 initial + 3 retries, attente 2-4-8s).
+            Conservé pour compat avec ancien code.
+    """
+    try:
+        return _get_with_retry_inner(client, url)
+    except RetryError as e:
+        logger.error("Retries épuisés pour {url} : {err}", url=url, err=str(e))
+        raise
+    except httpx.HTTPError as e:
+        logger.warning("HTTP error sur {url} : {err}", url=url, err=str(e))
+        raise

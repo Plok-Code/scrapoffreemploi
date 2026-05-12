@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import httpx
 
 from backend import matching, queries
+from backend._logging import logger
 from backend.db import db
 from backend.scrapers._http import DEFAULT_HEADERS, polite_sleep
 from backend.scrapers.base import RawOffer, Scraper
@@ -48,6 +49,8 @@ def run_scrape(
     max_pages: int = 3,
     generate_batch: bool = True,
 ) -> ScrapeResult:
+    logger.info("Scrape démarré : source={source} max_pages={max_pages}",
+                source=source, max_pages=max_pages)
     """Lance le scraper d'une source, insère en DB, optionnellement génère le batch JSON.
 
     Args:
@@ -97,6 +100,10 @@ def run_scrape(
         total_new=len(new_ids),
         total_duplicates=duplicates,
         batch_file=batch_path,
+    )
+    logger.info(
+        "Scrape terminé : source={source} fetched={f} new={n} dup={d}",
+        source=source, f=len(raw_offers), n=len(new_ids), d=duplicates,
     )
 
     return ScrapeResult(

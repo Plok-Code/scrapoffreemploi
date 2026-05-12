@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from backend._logging import logger
 from backend.scrapers._keywords import matches_keywords
 from backend.scrapers.base import RawOffer, Scraper
 
@@ -95,12 +96,18 @@ def _get_token(client: httpx.Client) -> str:
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
+    if resp.status_code != 200:
+        logger.error(
+            "FT OAuth token request failed : status={s} body={b}",
+            s=resp.status_code, b=resp.text[:200],
+        )
     resp.raise_for_status()
     data = resp.json()
     token = data["access_token"]
     expires_in = int(data.get("expires_in", 1499))
     _TOKEN_CACHE["token"] = token
     _TOKEN_CACHE["expires_at"] = now + expires_in
+    logger.debug("FT OAuth token refreshed (expires in {e}s)", e=expires_in)
     return token
 
 

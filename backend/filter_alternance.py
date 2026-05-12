@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from backend import queries
+from backend._logging import logger
 from backend.db import db
 
 
@@ -166,6 +167,11 @@ def filter_non_alternance_offers(*, dry_run: bool = False) -> dict:
                 "deleted": not has_status,
             })
 
+    logger.info(
+        "Filtre non-alternance : keep={k} doubt={d} deleted={del_} archived={a}",
+        k=stats["keep"], d=stats["doubt"],
+        del_=stats["reject_deleted"], a=stats["reject_archived"],
+    )
     return stats
 
 
