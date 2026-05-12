@@ -8,8 +8,9 @@ App web locale (Python + SQLite, sans Node.js) pour scraper, scorer et suivre de
 - **DB** : SQLite (un seul fichier `data/app.db`)
 - **Templating** : Jinja2 (HTML server-rendered)
 - **Frontend** : HTMX 2.0 + Tailwind v3 via CDN (zéro build step, zéro Node.js)
-- **Scraping** (à venir) : `httpx` + `beautifulsoup4` + `lxml`
+- **Scraping** : `httpx` + `beautifulsoup4` + `lxml` + `playwright` (fallback SPA)
 - **Xlsx I/O** : `openpyxl` (migration et export uniquement)
+- **APIs externes** : France Travail Offres d'emploi v2 (OAuth), WTTJ Algolia (clés publiques)
 - **OS** : Windows 11, shell PowerShell (Bash dispo via Git Bash)
 - **Pas de** : Node.js, pnpm, React, Tailwind build, TypeScript, ORM, Prisma, Docker
 
@@ -37,14 +38,34 @@ python -m backend
 scrapoffreemploi/
 ├── backend/
 │   ├── __main__.py             # python -m backend → uvicorn
-│   ├── main.py                 # FastAPI app + toutes les routes web/API
-│   ├── db.py                   # connexion SQLite + helpers
-│   ├── schema.sql              # DDL (1 table offers + scrape_runs)
-│   ├── models.py               # Pydantic + constantes (statuts, labels, mapping score)
-│   ├── queries.py              # CRUD + filtres + stats (couche d'accès données)
+│   ├── main.py                 # FastAPI app + routes web/API (17 routes)
+│   ├── db.py                   # connexion SQLite + migrations conditionnelles
+│   ├── schema.sql              # DDL : offers + target_companies + scrape_runs
+│   ├── models.py               # Pydantic + constantes (statuts, labels, etc.)
+│   ├── queries.py              # CRUD + filtres + stats (offers + target_companies)
 │   ├── migrate_xlsx.py         # one-shot xlsx -> SQLite (préserve le xlsx)
-│   ├── scrapers/               # À VENIR : 1 fichier par source
-│   ├── templates/              # Jinja : base, offers, offer_detail
+│   ├── matching.py             # export batch JSON pour scoring + apply scores
+│   ├── heuristic_scorer.py     # scoring auto v2 (mots-clés par axe + pénalités)
+│   ├── filter_alternance.py    # filtre auto non-alternance (delete + archive)
+│   ├── seed_company_cities.py  # one-shot : remplit city + multi-villes
+│   ├── seed_high_priority_other_cities.py  # one-shot : Hautes hors-5-villes
+│   ├── seed_toulouse_contact_methods.py    # one-shot : canaux contact Toulouse
+│   ├── dedup_company_names.py  # one-shot : fusion alias (Capgemini Eng (ex-Altran))
+│   ├── scrapers/               # 1 module par source/SaaS
+│   │   ├── _http.py            # session httpx (UA Chrome, retry, no brotli)
+│   │   ├── _keywords.py        # regex IA/ML/DL/LLM/data
+│   │   ├── _playwright.py      # persistent_browser pour scrape loggué
+│   │   ├── base.py             # ABC Scraper + RawOffer
+│   │   ├── registry.py         # SCRAPERS dict
+│   │   ├── runner.py           # run_scrape + check_alive + cleanup + full_scrape
+│   │   ├── _generic.py         # GenericScraper (multi-fallback HTML)
+│   │   ├── hellowork.py        # HelloWork (httpx + JSON-LD JobPosting)
+│   │   ├── francetravail.py    # API OAuth2 v2 (E1/E2 alternance)
+│   │   ├── wttj.py             # Algolia public keys
+│   │   ├── linkedin.py         # Playwright loggué (archives = expired)
+│   │   ├── company_portals.py  # Workable / Lever / Workday / Greenhouse / Taleez / Phenom / Playwright
+│   │   └── labonneboite.py     # LBB v2 (bloqué 403, habilitation FT requise)
+│   ├── templates/              # Jinja : base, offers, offer_detail, companies, company_detail
 │   └── static/                 # CSS minimal (Tailwind via CDN)
 ├── data/                       # gitignored
 │   ├── app.db                  # SQLite, source de vérité
@@ -63,18 +84,30 @@ scrapoffreemploi/
 ## Fichiers centraux (lire en priorité)
 
 Quand tu travailles sur :
-- **Le schéma DB** → `backend/schema.sql`
+- **Le schéma DB** → `backend/schema.sql` (offers + target_companies + scrape_runs)
 - **Une requête SQL** → `backend/queries.py` (toujours passer par là, jamais d'inline SQL ailleurs)
-- **Une route HTTP** → `backend/main.py` (toutes les routes y sont, séparées si la liste grossit)
-- **Le scoring LLM** → `backend/models.py` (constantes), workflow décrit ci-dessous
+- **Une route HTTP** → `backend/main.py` (17 routes ; splitter si > 200 lignes via APIRouter)
+- **Le scoring LLM manuel** → `backend/matching.py` + `backend/models.py` (workflow batch JSON)
+- **Le scoring auto heuristique** → `backend/heuristic_scorer.py` (mots-clés par axe + pénalités CDI/Senior)
+- **Le filtre alternance** → `backend/filter_alternance.py` (delete/archive non-alternance, appliqué auto à chaque scrape)
+- **Le cleanup URLs mortes** → `backend/scrapers/runner.cleanup_dead_unstatused` (4 niveaux de détection)
+- **Un nouveau scraper SaaS RH** → `backend/scrapers/company_portals.py` (dispatcher Workable/Lever/Workday/Greenhouse/Taleez/Phenom/Playwright)
 - **La migration xlsx** → `backend/migrate_xlsx.py` (NE PAS toucher au xlsx original)
-- **Une vue HTML** → `backend/templates/offers.html` ou `offer_detail.html`
+- **Une vue HTML** → `backend/templates/{offers, offer_detail, companies, company_detail}.html`
 
 ## Données du projet
 
-- **194 offres** dans `data/app.db` (table `offers`), migrées depuis le xlsx du 12 mai 2026
-- **71 entreprises cibles** en "candidature spontanée" sauvées dans `data/companies_spontaneous_extracted.json` pour la phase 2
+État au 12 mai 2026 (après scraping massif + filtres) :
+- **~900 offres actives** dans `data/app.db` (table `offers`), score Top/Bon/Moyen/Faible
+- **~260 entreprises cibles** dans `target_companies` :
+  - 65 initiales du xlsx historique (priorité Haute/Moyenne/Basse, 36 Haute)
+  - +128 importées depuis offres scrapées via les 5 villes cibles
+  - +16 entreprises Haute hors-5-villes
+  - +52 lignes multi-implantation (Airbus Toulouse/Nantes/Paris, Capgemini ×5, etc.)
+  - 1 row par couple (entreprise, ville) — index UNIQUE (LOWER(name), LOWER(city))
+- **5 villes cibles fixes** : Toulouse, Bordeaux, Pau, Paris, Nancy. Pour les autres villes France → seulement priorité Haute.
 - Le xlsx **source de vérité historique** : `data/source/candidatures_alternance_AI_Engineer.xlsx` (gitignored, dans le projet)
+- **Credentials FT** dans `.env` (gitignored) : `FRANCETRAVAIL_CLIENT_ID` / `FRANCETRAVAIL_CLIENT_SECRET`
 
 ## Règles non-négociables
 
@@ -123,10 +156,32 @@ Et filtre sources : `alternance` + `France` uniquement.
 ## Statuts d'une offre
 
 Champ `status` (table `offers`) :
-- **vide** = pas encore postulé
+- **vide** = pas encore postulé (= "À postuler")
 - `Postulé`, `Relancé`, `Entretien`, `Test technique`, `Refusé`, `Accepté`, `Sans réponse`, `Abandonné`
+- `Pas intéressé` : offre vue mais ne correspond pas — disparaît de l'onglet "À postuler"
 
 Le champ séparé `application_method` (libre) sert pour les notes "Portail officiel recommandé / Email RH / etc." — ne PAS le mélanger avec `status`.
+
+## Cycle de vie d'une offre (règle métier)
+
+À chaque scrape "Tout" (`POST /api/scrape` source=all) :
+
+1. **Cleanup URLs mortes** (`cleanup_dead_unstatused`) — détection à 4 niveaux :
+   - HTTP 404/410 explicite
+   - Body : 18 regex (`offre n'est plus disponible`, `no longer available`, `résultats de la recherche`, etc.)
+   - Title : `erreur.*inexistante`, `current openings`, `404`
+   - URL finale après redirects : `?not_found=true`, `trk=expired_jd_redirect`, ou URL < 50% de l'original
+   - Workday : probe API JSON dédiée `/wday/cxs/{tenant}/{site}/job/{id}`
+   - **Action** : si `status=NULL` → `DELETE` ; si `status≠NULL` → `is_active=0` (préserve l'historique applicatif)
+
+2. **Scrape job boards** (FT API + WTTJ Algolia + HelloWork HTML)
+3. **Scrape portails entreprises** (Workable/Lever/Workday/Greenhouse/Taleez/Phenom/Playwright)
+4. **Filtre non-alternance** (`filter_non_alternance_offers`) :
+   - Garde : `alternance|apprenti|professionnalisation` mentionné
+   - Rejet : `CDI|CDD|Senior|Lead Data/ML|Tech Lead|Manager|Director|stage seul` dans titre
+   - Doute → garde (principe : on garde sauf si on est sûr de rejeter)
+5. **Heuristic scoring auto** sur les nouvelles offres
+6. **Toutes les nouvelles offres** ont un score immédiatement
 
 ## MCPs installés (scope user)
 

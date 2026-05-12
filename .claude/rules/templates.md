@@ -17,9 +17,11 @@ paths:
 
 ## Hiérarchie
 
-- `templates/base.html` : layout commun (navbar, head, scripts CDN)
-- `templates/offers.html` : page liste, étend `base.html`
-- `templates/offer_detail.html` : page détail + form, étend `base.html`
+- `templates/base.html` : layout commun (navbar + bouton Scraper HTMX + script JS de polling)
+- `templates/offers.html` : liste des offres + bouton 👎 inline "Pas intéressé"
+- `templates/offer_detail.html` : détail offre + form tracking
+- `templates/companies.html` : liste entreprises cibles + tabs villes + filtre `?city=...&other_haute=true`
+- `templates/company_detail.html` : détail entreprise + form tracking
 
 ## Pattern : étendre base.html
 
@@ -59,9 +61,42 @@ Utiliser SEULEMENT ces couleurs sémantiques :
 
 Bg/text doublé : `bg-emerald-100 text-emerald-800`, `bg-rose-100 text-rose-800`, etc.
 
-## HTMX patterns (à utiliser à venir)
+## HTMX patterns en place
 
-Pour update inline sans reload :
+### Bouton scrape async + polling status (base.html)
+
+```html
+<form hx-post="/api/scrape" hx-trigger="submit" hx-target="#scrape-status" hx-swap="innerHTML">
+    <input type="hidden" name="source" value="all" />
+    <input type="number" name="max_pages" value="5" />
+    <label><input type="checkbox" name="use_playwright" value="true" /> Mode lent</label>
+    <button type="submit">Lancer tout</button>
+</form>
+<div id="scrape-status"
+     hx-get="/api/scrape/status"
+     hx-trigger="load, every 3s"
+     hx-swap="innerHTML"></div>
+```
+
+JS minimal dans base.html pour parser le JSON du status et formater en HTML.
+
+### Bouton inline "Pas intéressé" (offers.html)
+
+```html
+<button hx-post="/api/offers/{{ o.id }}/status"
+        hx-vals='{"status": "Pas intéressé"}'
+        hx-swap="none"
+        hx-on::after-request="if(event.detail.successful)
+            document.getElementById('offer-row-{{ o.id }}').remove();">
+    👎
+</button>
+```
+
+Important : utiliser un endpoint dédié **form-encoded** (`POST /api/offers/{id}/status`)
+plutôt que `PATCH /api/offers/{id}` qui attend du JSON (HTMX sans `json-enc`
+envoie du form-encoded par défaut).
+
+### Update inline sans reload (futur)
 ```html
 <select name="status"
         hx-patch="/api/offers/{{ offer.id }}"
@@ -71,7 +106,7 @@ Pour update inline sans reload :
 </select>
 ```
 
-Pour confirmation avant action destructive :
+### Confirmation avant action destructive
 ```html
 <button hx-post="/api/offers/{{ offer.id }}/delete"
         hx-confirm="Supprimer cette offre ?">
