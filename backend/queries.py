@@ -129,6 +129,9 @@ def get_stats() -> dict:
         unscored = cur.execute(
             f"SELECT COUNT(*) FROM offers WHERE match_score IS NULL AND {active_clause}"
         ).fetchone()[0]
+        not_interested = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE status = 'Pas intéressé' AND {active_clause}"
+        ).fetchone()[0]
         archived = cur.execute("SELECT COUNT(*) FROM offers WHERE is_active = 0").fetchone()[0]
     return {
         "total": total,
@@ -139,6 +142,7 @@ def get_stats() -> dict:
         "top_fit": top_fit,
         "bon_fit": bon_fit,
         "unscored": unscored,
+        "not_interested": not_interested,
         "archived": archived,
     }
 

@@ -17,10 +17,11 @@ VALID_STATUSES = (
     "Accepté",
     "Sans réponse",
     "Abandonné",
+    "Pas intéressé",   # offre vue mais ne correspond pas (mauvais fit, géo, contrat, etc.)
 )
 Status = Literal[
     "Postulé", "Relancé", "Entretien", "Test technique",
-    "Refusé", "Accepté", "Sans réponse", "Abandonné",
+    "Refusé", "Accepté", "Sans réponse", "Abandonné", "Pas intéressé",
 ]
 
 VALID_PRIORITIES = ("Haute", "Moyenne", "Basse")

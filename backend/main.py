@@ -227,6 +227,18 @@ def api_update_offer(offer_id: int, payload: dict):
     return {"ok": True}
 
 
+@app.post("/api/offers/{offer_id}/status")
+def api_set_offer_status(offer_id: int, status: str = Form("")):
+    """Toggle rapide du statut depuis la liste (form-encoded, compatible HTMX).
+
+    `status=""` (vide) remet l'offre en `status=NULL` (= À postuler).
+    """
+    ok = queries.update_offer(offer_id, {"status": status})
+    if not ok:
+        raise HTTPException(404, "Offre introuvable")
+    return {"ok": True, "offer_id": offer_id, "status": status or None}
+
+
 # ---------- API Scraping ----------
 
 # État du scraping en cours (in-memory, lifecycle = uvicorn worker)

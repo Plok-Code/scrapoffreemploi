@@ -28,6 +28,8 @@
         <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800">{{ status }}</span>
     {% elif status == "Relancé" %}
         <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800">{{ status }}</span>
+    {% elif status == "Pas intéressé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-zinc-200 text-zinc-600 line-through">{{ status }}</span>
     {% else %}
         <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ status }}</span>
     {% endif %}
@@ -142,15 +144,15 @@
                 <th class="text-left px-3 py-2">Source</th>
                 <th class="text-left px-3 py-2">Date pub.</th>
                 <th class="text-left px-3 py-2">Statut</th>
-                <th class="text-left px-3 py-2 w-20">Action</th>
+                <th class="text-left px-3 py-2 w-28">Actions</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
             {% for o in offers %}
-            <tr class="hover:bg-slate-50">
+            <tr id="offer-row-{{ o.id }}" class="hover:bg-slate-50 {% if o.status == 'Pas intéressé' %}opacity-50{% endif %}">
                 <td class="px-3 py-2">{{ score_badge(o.match_score) }}</td>
                 <td class="px-3 py-2">
-                    <a href="/offers/{{ o.id }}" class="text-slate-900 hover:underline font-medium">
+                    <a href="/offers/{{ o.id }}" class="text-slate-900 hover:underline font-medium {% if o.status == 'Pas intéressé' %}line-through{% endif %}">
                         {{ o.title }}
                     </a>
                 </td>
@@ -162,10 +164,33 @@
                 <td class="px-3 py-2 text-slate-500 text-xs">{{ o.date_published or "—" }}</td>
                 <td class="px-3 py-2">{{ status_badge(o.status) }}</td>
                 <td class="px-3 py-2">
-                    {% if o.url %}
-                        <a href="{{ o.url }}" target="_blank" rel="noopener"
-                           class="text-xs text-blue-600 hover:underline">Voir ↗</a>
-                    {% endif %}
+                    <div class="flex items-center gap-1.5">
+                        {% if o.url %}
+                            <a href="{{ o.url }}" target="_blank" rel="noopener"
+                               class="text-xs text-blue-600 hover:underline">Voir ↗</a>
+                        {% endif %}
+                        {% if o.status == "Pas intéressé" %}
+                            <button type="button"
+                                    title="Annuler 'Pas intéressé' (remettre dans À postuler)"
+                                    hx-post="/api/offers/{{ o.id }}/status"
+                                    hx-vals='{"status": ""}'
+                                    hx-swap="none"
+                                    hx-on::after-request="if(event.detail.successful) window.location.reload();"
+                                    class="text-xs text-slate-500 hover:text-slate-900">
+                                ↩️ Remettre
+                            </button>
+                        {% elif not o.status %}
+                            <button type="button"
+                                    title="Marquer 'Pas intéressé' (ne plus afficher dans À postuler)"
+                                    hx-post="/api/offers/{{ o.id }}/status"
+                                    hx-vals='{"status": "Pas intéressé"}'
+                                    hx-swap="none"
+                                    hx-on::after-request="if(event.detail.successful) document.getElementById('offer-row-{{ o.id }}').remove();"
+                                    class="text-xs text-slate-400 hover:text-rose-700">
+                                👎
+                            </button>
+                        {% endif %}
+                    </div>
                 </td>
             </tr>
             {% else %}
