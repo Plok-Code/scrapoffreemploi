@@ -627,8 +627,15 @@ def scrape_target_company_portals(
                         inserted += 1
                     else:
                         dup += 1
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as e:  # noqa: BLE001
+                    # Log au lieu d'avaler : permet de debug les pbs d'insert
+                    # (URL trop longue, dedup_key conflict, contrainte DB...)
+                    logger.warning(
+                        "Insert offer KO company={c} title={t!r} err={err}",
+                        c=company_name,
+                        t=(raw.title or "")[:60],
+                        err=str(e),
+                    )
 
             if i < len(targets):
                 polite_sleep(sleep_between)

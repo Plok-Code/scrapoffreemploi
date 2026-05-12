@@ -459,12 +459,13 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
 def api_scrape(
     bg: BackgroundTasks,
     source: str = Form(...),
-    max_pages: int = Form(3),
+    max_pages: int = Form(3, ge=1, le=30),
     use_playwright: bool = Form(False),
 ):
     """Lance un scrape en arrière-plan.
 
     `source=all` ou `source=ALL` lance un scrape multi-source complet.
+    `max_pages` : 1-30 (FastAPI valide via `ge`/`le`, retourne 422 si hors borne).
     `use_playwright=True` active le fallback Playwright pour les SPAs React
     (Capgemini, Airbus, Atos, etc.) — lent (~30s par portail SPA).
     Statut via GET /api/scrape/status.

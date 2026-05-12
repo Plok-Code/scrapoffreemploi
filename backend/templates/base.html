@@ -95,10 +95,13 @@
                             </form>
                         </details>
 
+                        {# hx-swap="none" : on ne laisse PAS HTMX écrire la réponse JSON
+                            dans le DOM. Le JS handler `htmx:afterRequest` rebuild via
+                            DOM API (createElement/textContent) — voir bas du fichier. #}
                         <div id="scrape-status" class="mt-3 text-xs"
                              hx-get="/api/scrape/status"
                              hx-trigger="load, every 3s"
-                             hx-swap="innerHTML"></div>
+                             hx-swap="none"></div>
                     </div>
                 </details>
             </div>
