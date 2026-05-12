@@ -90,7 +90,10 @@ CREATE TABLE IF NOT EXISTS target_companies (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_target_companies_name ON target_companies(LOWER(name));
+-- Index UNIQUE sur (name, city) : permet une row par (entreprise, ville).
+-- Ex : Capgemini Paris + Capgemini Toulouse = 2 rows (2 candidatures distinctes).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_target_companies_name_city
+    ON target_companies(LOWER(name), LOWER(COALESCE(city, '')));
 CREATE INDEX IF NOT EXISTS idx_target_companies_priority ON target_companies(priority);
 CREATE INDEX IF NOT EXISTS idx_target_companies_status ON target_companies(status);
 CREATE INDEX IF NOT EXISTS idx_target_companies_city ON target_companies(LOWER(city));

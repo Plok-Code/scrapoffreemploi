@@ -445,18 +445,23 @@ def import_companies_from_offers_to_targets(*, city_substr: str, min_score: int 
 
 
 def insert_target_company(data: dict) -> tuple[int | None, bool]:
-    """Insère une entreprise cible. Dédup sur LOWER(name).
+    """Insère une entreprise cible. Dédup sur (LOWER(name), LOWER(city)).
+
+    Une même entreprise peut exister plusieurs fois si elle a plusieurs implantations
+    (ex : Capgemini Paris, Capgemini Toulouse, etc.).
 
     Returns:
-        (id, was_new). was_new=False si déjà présente.
+        (id, was_new). was_new=False si déjà présente sur cette ville.
     """
     name = (data.get("name") or "").strip()
     if not name:
         raise ValueError("name required")
+    city = (data.get("city") or "").strip().lower()
     with db() as conn:
         existing = conn.execute(
-            "SELECT id FROM target_companies WHERE LOWER(name) = LOWER(?)",
-            (name,),
+            "SELECT id FROM target_companies "
+            "WHERE LOWER(name) = LOWER(?) AND LOWER(COALESCE(city, '')) = ?",
+            (name, city),
         ).fetchone()
         if existing:
             return existing["id"], False

@@ -64,6 +64,12 @@ def init_schema() -> None:
             if "source" not in tc_cols:
                 conn.execute("ALTER TABLE target_companies ADD COLUMN source TEXT")
                 conn.execute("UPDATE target_companies SET source = 'xlsx historique' WHERE source IS NULL")
+            # Index UNIQUE : passage de (name) seul à (name, city) — autorise multi-implantation
+            old_idx = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_target_companies_name'"
+            ).fetchone()
+            if old_idx:
+                conn.execute("DROP INDEX idx_target_companies_name")
         # Étape 2 : appliquer le schéma complet (CREATE IF NOT EXISTS + indexes)
         conn.executescript(schema)
 
