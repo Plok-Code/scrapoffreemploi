@@ -341,6 +341,7 @@ def _run_full_scrape_bg(max_pages: int) -> None:
             "archived_dead": cleanup.archived if cleanup else 0,
             "portals_attempted": result.portals_attempted,
             "portals_offers_inserted": result.portals_offers_inserted,
+            "non_alternance_removed": result.non_alternance_removed,
             "scoring_applied": result.scoring_applied,
             "per_source": per_source_summary,
         })

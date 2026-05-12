@@ -592,6 +592,7 @@ class FullScrapeResult:
     per_source: dict[str, ScrapeResult]
     portals_attempted: int
     portals_offers_inserted: int
+    non_alternance_removed: int   # delete + archive après filtre
     total_new: int
     scoring_applied: int
 
@@ -655,6 +656,13 @@ def run_full_scrape(
                 total_duplicates=0, error=str(e),
             )
 
+    # Filtre non-alternance : delete/archive les offres CDI/CDD/stage seul/senior/etc.
+    # Appliqué après les scrapes pour rattraper les faux positifs (FT renvoie parfois
+    # des CDI Senior malgré natureContrat=E1,E2).
+    from backend.filter_alternance import filter_non_alternance_offers
+    filter_result = filter_non_alternance_offers()
+    non_alternance_removed = filter_result["reject_deleted"] + filter_result["reject_archived"]
+
     scoring_applied = 0
     if do_auto_score and total_new > 0:
         from backend.heuristic_scorer import apply_heuristic_to_unscored
@@ -666,6 +674,7 @@ def run_full_scrape(
         per_source=per_source,
         portals_attempted=portals_attempted,
         portals_offers_inserted=portals_inserted,
+        non_alternance_removed=non_alternance_removed,
         total_new=total_new,
         scoring_applied=scoring_applied,
     )

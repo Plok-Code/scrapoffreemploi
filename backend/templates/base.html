@@ -124,6 +124,9 @@
                                 }
                                 html += '<br>';
                             }
+                            if (json.non_alternance_removed !== undefined && json.non_alternance_removed > 0) {
+                                html += '• 🚫 Filtre non-alternance (CDI/CDD/stage seul) : ' + json.non_alternance_removed + ' offres retirées<br>';
+                            }
                             if (json.scoring_applied !== undefined && json.scoring_applied > 0) {
                                 html += '• 🎯 Scoring auto appliqué : ' + json.scoring_applied + ' offres<br>';
                             }
