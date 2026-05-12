@@ -604,6 +604,7 @@ def run_full_scrape(
     do_cleanup: bool = True,
     do_auto_score: bool = True,
     do_portals: bool = True,
+    use_playwright_fallback: bool = False,
 ) -> FullScrapeResult:
     """Lance un scrape multi-source complet : cleanup → job boards → portails entreprises → scoring auto.
 
@@ -613,6 +614,7 @@ def run_full_scrape(
         do_cleanup: si True, ping URLs existantes ; supprime celles mortes+sans statut, archive les autres.
         do_auto_score: si True, lance le heuristic scorer sur les nouvelles offres.
         do_portals: si True, scrape aussi les portails de chaque target_company avec source_url.
+        use_playwright_fallback: si True, lance Playwright sur les portails SPA sans API (lent).
     """
     from backend.scrapers.registry import list_scrapers
 
@@ -646,7 +648,10 @@ def run_full_scrape(
     if do_portals:
         from backend.scrapers.company_portals import scrape_target_company_portals
         try:
-            pr = scrape_target_company_portals(sleep_between=0.8)
+            pr = scrape_target_company_portals(
+                sleep_between=0.8,
+                use_playwright_fallback=use_playwright_fallback,
+            )
             portals_attempted = pr.portals_attempted
             portals_inserted = pr.new_offers_inserted
             total_new += pr.new_offers_inserted

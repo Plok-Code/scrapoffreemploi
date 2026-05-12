@@ -52,6 +52,49 @@ def _is_workday(url: str) -> bool:
     return bool(re.match(r"https?://[^.]+\.[a-z0-9]+\.myworkdayjobs\.com", url))
 
 
+def _extract_greenhouse_slug(url: str, html: str | None = None) -> str | None:
+    """Identifier le board_id Greenhouse depuis l'URL ou le HTML.
+
+    URL directe : boards.greenhouse.io/{slug} ou job-boards.greenhouse.io/{slug}
+    URL custom : carrers.doctolib.com → le board_id est dans le HTML
+    (lien vers job-boards.greenhouse.io/{slug}/jobs/...).
+    """
+    m = re.match(
+        r"https?://(?:boards|job-boards)\.greenhouse\.io/(?:embed/)?([^/?#]+)",
+        url,
+    )
+    if m:
+        return m.group(1)
+    if html:
+        # Cherche l'URL d'embed/board dans le HTML (échappée \\/ aussi)
+        m = re.search(
+            r"(?:boards|job-boards)\.greenhouse\.io[/\\]+(?:embed[/\\]+[^/?#\\]+[/\\]+)?([a-z0-9-]+)",
+            html,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1)
+    return None
+
+
+def _extract_taleez_tenant(url: str) -> str | None:
+    """`https://irt-saint-exupery.taleez.com/` → `irt-saint-exupery`.
+
+    Ou si URL custom (donecle.com), on cherche un lien Taleez dans le HTML
+    (à faire au call-site).
+    """
+    m = re.match(r"https?://([^.]+)\.taleez\.com", url)
+    return m.group(1) if m else None
+
+
+def _is_phenom_url(url: str) -> bool:
+    """URL des plateformes Phenom People (utilisé par Thales, Nokia, Atos…).
+
+    Pattern : `careers.{company}.com/global/en/c/...` ou similaire.
+    """
+    return bool(re.search(r"careers\.(?:thalesgroup|bcg|datadoghq|nokia)\.com|jobs\.nokia\.com", url))
+
+
 def _fetch_workable_jobs(slug: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
     """API Workable publique : retourne toutes les offres d'un compte."""
     url = f"https://apply.workable.com/api/v3/accounts/{slug}/jobs"
@@ -131,6 +174,167 @@ def _fetch_lever_jobs(slug: str, company_name: str, client: httpx.Client) -> lis
     return offers
 
 
+def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
+    """API Greenhouse publique : `boards-api.greenhouse.io/v1/boards/{slug}/jobs`."""
+    api_url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    try:
+        r = client.get(api_url, headers={"Accept": "application/json"})
+        if r.status_code != 200:
+            return []
+        data = r.json()
+    except Exception:  # noqa: BLE001
+        return []
+
+    offers: list[RawOffer] = []
+    for j in data.get("jobs", []):
+        title = (j.get("title") or "").strip()
+        if not title:
+            continue
+        # Greenhouse content peut être HTML, on extrait juste le texte
+        content_html = j.get("content") or ""
+        desc = ""
+        if content_html:
+            from bs4 import BeautifulSoup as BS
+            try:
+                desc = BS(content_html, "lxml").get_text(separator="\n", strip=True)
+            except Exception:  # noqa: BLE001
+                desc = content_html
+        if not matches_keywords(title, desc):
+            continue
+        offices = j.get("offices") or []
+        cities = [o.get("name", "") for o in offices if o.get("name")]
+        city = ", ".join(cities) if cities else None
+        # Skip si hors-France évident
+        if city and not re.search(r"France|Paris|Lyon|Toulouse|Bordeaux|Pau|Nancy|Nantes|Lille|Marseille|Grenoble|Remote|EMEA", city, re.IGNORECASE):
+            continue
+        offer_url = j.get("absolute_url") or ""
+        if not offer_url:
+            continue
+        contract = "Alternance" if re.search(r"altern|apprent|professionnali[sz]", title.lower()) else None
+        offers.append(RawOffer(
+            title=title,
+            company=company_name,
+            city=city,
+            url=offer_url,
+            source=f"Portail entreprise - {company_name} (Greenhouse)",
+            description=desc[:5000] if desc else None,
+            contract_type=contract,
+        ))
+    return offers
+
+
+def _fetch_taleez_jobs(tenant: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
+    """Taleez : pas d'API publique (401 sur /api/2/public/jobs).
+
+    Stratégie : parse le HTML SSR de `https://{tenant}.taleez.com/` qui liste
+    les offres directement (Next.js SSR, donc httpx voit le contenu).
+    """
+    base = f"https://{tenant}.taleez.com"
+    try:
+        r = client.get(base + "/", headers={"Accept": "text/html"})
+        if r.status_code != 200:
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+
+    soup = BeautifulSoup(r.text, "lxml")
+    offers: list[RawOffer] = []
+    seen = set()
+    # Taleez : liens vers les offres sont sous le pattern `/offers/{slug}` ou `/jobs/{id}`
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if not re.search(r"/(?:offers?|jobs?|fr_FR/job|positions?)/[a-z0-9_-]+", href, re.IGNORECASE):
+            continue
+        text = a.get_text(" ", strip=True)
+        if not text or len(text) < 6 or len(text) > 200:
+            continue
+        if not matches_keywords(text):
+            continue
+        # Filtre alternance/apprenti dans le titre
+        if not re.search(r"altern|apprent|professionnali|stage", text, re.IGNORECASE):
+            continue
+        if "stage" in text.lower() and not re.search(r"altern|apprent", text, re.IGNORECASE):
+            continue  # stage seul exclu
+        full_url = urljoin(base, href)
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        offers.append(RawOffer(
+            title=text,
+            company=company_name,
+            url=full_url,
+            source=f"Portail entreprise - {company_name} (Taleez)",
+            contract_type="Alternance",
+        ))
+        if len(offers) >= 30:
+            break
+    return offers
+
+
+def _fetch_phenom_jobs(url: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
+    """Phenom People : pas d'API publique documentée mais des endpoints JSON existent.
+
+    Pattern : `{base}/widgets/jobs/json/searchresults?keyword=alternance&searchby=location`
+    OU `{base}/api/jobs?keyword=...`
+    """
+    base = re.match(r"(https?://[^/]+)", url)
+    if not base:
+        return []
+    base_url = base.group(1)
+    # Plusieurs endpoints possibles selon le client Phenom
+    endpoints_to_try = [
+        f"{base_url}/widgets/jobs/json/searchresults?keyword=alternance",
+        f"{base_url}/api/jobs?keyword=alternance",
+        f"{base_url}/global/en/c/jobs.json?keywords=alternance",
+        f"{base_url}/jobs?keyword=alternance&format=json",
+    ]
+    data = None
+    for ep in endpoints_to_try:
+        try:
+            r = client.get(ep, headers={"Accept": "application/json"})
+            if r.status_code == 200 and r.text.strip().startswith(("{", "[")):
+                data = r.json()
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    if not data:
+        return []
+
+    # Structure varie selon le client : on cherche un tableau d'offres
+    items = (
+        data.get("jobs")
+        or data.get("jobResults")
+        or data.get("searchResults")
+        or data.get("data", {}).get("jobs", [])
+        if isinstance(data, dict) else data
+    )
+    if not items:
+        return []
+
+    offers: list[RawOffer] = []
+    for j in items:
+        title = (j.get("title") or j.get("jobTitle") or j.get("name") or "").strip()
+        if not title or not matches_keywords(title):
+            continue
+        if not re.search(r"altern|apprent|professionnali", title, re.IGNORECASE):
+            continue
+        offer_url = j.get("jobUrl") or j.get("url") or j.get("applyUrl") or ""
+        if offer_url and not offer_url.startswith("http"):
+            offer_url = base_url + offer_url
+        city = j.get("location") or j.get("city") or None
+        if city and not re.search(r"France|Paris|Toulouse|Bordeaux|Pau|Nancy|Lyon|Nantes|FR", str(city), re.IGNORECASE):
+            continue
+        offers.append(RawOffer(
+            title=title,
+            company=company_name,
+            city=str(city) if city else None,
+            url=offer_url or url,
+            source=f"Portail entreprise - {company_name} (Phenom)",
+            contract_type="Alternance",
+        ))
+    return offers
+
+
 def _fetch_workday_jobs(url: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
     """Workday : tente de hit l'API JSON `/wday/cxs/{tenant}/{site}/jobs`.
 
@@ -186,9 +390,70 @@ def _fetch_workday_jobs(url: str, company_name: str, client: httpx.Client) -> li
 # Heuristique : URLs internes qui ressemblent à une offre individuelle
 _JOB_LINK_HINTS = re.compile(
     r"/(jobs?|offres?|offer|career|carriere|emploi[s]?|apprenti|alternance|"
-    r"recruitment|recrutement|postuler|opening)/",
+    r"recruitment|recrutement|postuler|opening|positions?|consult)/",
     re.IGNORECASE,
 )
+
+
+def _fetch_playwright_page(url: str, company_name: str) -> list[RawOffer]:
+    """Fallback : utilise Playwright pour rendre la page (SPA JS) et extraire les offres.
+
+    Lent (~30s par portail) mais marche sur les SPAs React (Capgemini, Airbus,
+    Atos, Sopra Steria...). Réservé aux portails sans API/SSR.
+
+    Returns []  si Playwright indisponible ou échec.
+    """
+    try:
+        from backend.scrapers._playwright import persistent_browser
+    except ImportError:
+        return []
+
+    offers: list[RawOffer] = []
+    try:
+        with persistent_browser(headless=True, slow_mo=0) as browser:
+            page = browser.new_page()
+            page.goto(url, wait_until="networkidle", timeout=25_000)
+            # Attend que les offres soient chargées
+            page.wait_for_timeout(3_000)
+            html = page.content()
+            page.close()
+    except Exception:  # noqa: BLE001
+        return []
+
+    soup = BeautifulSoup(html, "lxml")
+    seen = set()
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if not href or href.startswith("#") or href.startswith("mailto:"):
+            continue
+        if not _JOB_LINK_HINTS.search(href):
+            continue
+        text = a.get_text(" ", strip=True)
+        if not text or len(text) < 8 or len(text) > 200:
+            continue
+        if not matches_keywords(text):
+            continue
+        ctx = (text + " " + href).lower()
+        if not re.search(r"altern|apprent|professionnali|stage", ctx):
+            continue
+        if "stage" in text.lower() and not re.search(r"altern|apprent", ctx):
+            continue
+        full_url = urljoin(url, href)
+        if urlparse(full_url).netloc != urlparse(url).netloc:
+            continue
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        offers.append(RawOffer(
+            title=text,
+            company=company_name,
+            url=full_url,
+            source=f"Portail entreprise - {company_name} (Playwright)",
+            contract_type="Alternance",
+        ))
+        if len(offers) >= 20:
+            break
+    return offers
 
 
 def _fetch_generic_career_page(url: str, company_name: str, client: httpx.Client) -> list[RawOffer]:
@@ -247,6 +512,7 @@ def scrape_target_company_portals(
     city_filter: str | None = None,
     limit: int | None = None,
     sleep_between: float = 1.0,
+    use_playwright_fallback: bool = False,
 ) -> PortalScrapeResult:
     """Itère sur target_companies avec source_url et scrape leurs offres.
 
@@ -254,6 +520,9 @@ def scrape_target_company_portals(
         city_filter: si fourni, ne scrape que les entreprises matchant cette ville.
         limit: max d'entreprises à scraper.
         sleep_between: pause entre 2 portails.
+        use_playwright_fallback: si True, lance Playwright sur les portails sans
+            résultat (SPAs React Capgemini, Airbus, etc.). Lent (~30s/portail).
+            Par défaut False (best-effort httpx seulement, plus rapide).
     """
     where = ["source_url IS NOT NULL", "source_url != ''"]
     params: list = []
@@ -286,18 +555,43 @@ def scrape_target_company_portals(
             url = t["source_url"]
             portals_attempted += 1
 
-            # Dispatch par type de plateforme
+            # Dispatch par type de plateforme (SaaS RH connu prioritaire)
             raw_offers: list[RawOffer] = []
             try:
-                slug = _extract_workable_slug(url)
-                if slug:
-                    raw_offers = _fetch_workable_jobs(slug, company_name, client)
-                elif _extract_lever_slug(url):
-                    raw_offers = _fetch_lever_jobs(_extract_lever_slug(url), company_name, client)
+                workable_slug = _extract_workable_slug(url)
+                lever_slug = _extract_lever_slug(url)
+                taleez_tenant = _extract_taleez_tenant(url)
+                greenhouse_slug = _extract_greenhouse_slug(url)
+
+                if workable_slug:
+                    raw_offers = _fetch_workable_jobs(workable_slug, company_name, client)
+                elif lever_slug:
+                    raw_offers = _fetch_lever_jobs(lever_slug, company_name, client)
                 elif _is_workday(url):
                     raw_offers = _fetch_workday_jobs(url, company_name, client)
+                elif taleez_tenant:
+                    raw_offers = _fetch_taleez_jobs(taleez_tenant, company_name, client)
+                elif greenhouse_slug:
+                    raw_offers = _fetch_greenhouse_jobs(greenhouse_slug, company_name, client)
+                elif _is_phenom_url(url):
+                    raw_offers = _fetch_phenom_jobs(url, company_name, client)
                 else:
-                    raw_offers = _fetch_generic_career_page(url, company_name, client)
+                    # Best-effort : 1) chercher si Greenhouse embed dans le HTML, sinon générique
+                    try:
+                        resp = client.get(url)
+                        if resp.status_code == 200:
+                            embedded_slug = _extract_greenhouse_slug(url, resp.text)
+                            if embedded_slug:
+                                raw_offers = _fetch_greenhouse_jobs(
+                                    embedded_slug, company_name, client
+                                )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if not raw_offers:
+                        raw_offers = _fetch_generic_career_page(url, company_name, client)
+                    # Dernier recours : Playwright pour SPAs React qui n'ont rien donné
+                    if not raw_offers and use_playwright_fallback:
+                        raw_offers = _fetch_playwright_page(url, company_name)
             except Exception:  # noqa: BLE001
                 pass
 

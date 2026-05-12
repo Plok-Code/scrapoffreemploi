@@ -288,13 +288,16 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
         _SCRAPE_STATE["finished_at"] = datetime.now().isoformat(timespec="seconds")
 
 
-def _run_full_scrape_bg(max_pages: int) -> None:
-    """Tâche d'arrière-plan : scrape TOUTES les sources + cleanup + scoring auto.
+def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
+    """Tâche d'arrière-plan : scrape complet + cleanup + filtre + scoring auto.
 
     Étapes :
-    1. Cleanup : ping URLs existantes, supprime celles 404+sans statut user, archive les autres.
-    2. Scrape : FT + WTTJ + HelloWork (séquentiel, dédup auto).
-    3. Scoring auto : heuristique v2 sur les nouvelles offres.
+    1. Cleanup URLs existantes (404 → delete sans-statut, archive avec statut)
+    2. Job boards : FT + WTTJ + HelloWork (séquentiel, dédup auto)
+    3. Portails entreprises : Workable/Lever/Workday/Greenhouse + best-effort
+       (+ Playwright si use_playwright=True, sur les SPAs sans API)
+    4. Filtre non-alternance (CDI/Senior/stage seul → delete/archive)
+    5. Heuristic scoring auto sur les nouvelles offres
     """
     from datetime import datetime
 
@@ -302,7 +305,7 @@ def _run_full_scrape_bg(max_pages: int) -> None:
 
     _SCRAPE_STATE.update({
         "running": True,
-        "source": "ALL (FT+WTTJ+HW)",
+        "source": "ALL (FT+WTTJ+HW+portails)" + (" + Playwright" if use_playwright else ""),
         "step": "starting",
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
@@ -313,6 +316,7 @@ def _run_full_scrape_bg(max_pages: int) -> None:
         "archived_dead": 0,
         "scoring_applied": 0,
         "per_source": {},
+        "playwright_enabled": use_playwright,
         "error": None,
     })
     try:
@@ -322,6 +326,7 @@ def _run_full_scrape_bg(max_pages: int) -> None:
             do_cleanup=True,
             do_auto_score=True,
             do_portals=True,
+            use_playwright_fallback=use_playwright,
         )
         cleanup = result.cleanup
         per_source_summary = {
@@ -353,11 +358,17 @@ def _run_full_scrape_bg(max_pages: int) -> None:
 
 
 @app.post("/api/scrape")
-def api_scrape(bg: BackgroundTasks, source: str = Form(...), max_pages: int = Form(3)):
+def api_scrape(
+    bg: BackgroundTasks,
+    source: str = Form(...),
+    max_pages: int = Form(3),
+    use_playwright: bool = Form(False),
+):
     """Lance un scrape en arrière-plan.
 
-    `source=all` ou `source=ALL` lance un scrape multi-source : cleanup + FT + WTTJ + HW + scoring.
-    Sinon, scrape de la source unique nommée.
+    `source=all` ou `source=ALL` lance un scrape multi-source complet.
+    `use_playwright=True` active le fallback Playwright pour les SPAs React
+    (Capgemini, Airbus, Atos, etc.) — lent (~30s par portail SPA).
     Statut via GET /api/scrape/status.
     """
     from backend.scrapers.registry import list_scrapers
@@ -366,8 +377,8 @@ def api_scrape(bg: BackgroundTasks, source: str = Form(...), max_pages: int = Fo
         raise HTTPException(409, f"Un scrape '{_SCRAPE_STATE.get('source')}' est déjà en cours.")
 
     if source.lower() == "all":
-        bg.add_task(_run_full_scrape_bg, max_pages)
-        return {"ok": True, "source": "ALL", "max_pages": max_pages}
+        bg.add_task(_run_full_scrape_bg, max_pages, use_playwright)
+        return {"ok": True, "source": "ALL", "max_pages": max_pages, "playwright": use_playwright}
 
     available = set(list_scrapers())
     if source not in available:
