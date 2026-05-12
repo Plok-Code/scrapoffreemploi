@@ -81,12 +81,31 @@ with db() as conn:
 ## Dédoublonnage
 
 ### Offres
-Stratégie en 2 niveaux à `queries.insert_offer()` :
+Stratégie en 2 niveaux à `queries.insert_offer()` / `insert_offers_bulk()` :
 1. **Par URL** : `UNIQUE INDEX idx_offers_url ON offers(url) WHERE url IS NOT NULL AND url != ''`
-2. **Par clé titre+entreprise normalisée** : champ `dedup_key`, via `make_dedup_key(title, company)`
+2. **Par clé titre+entreprise+ville normalisée** : champ `dedup_key`, via `make_dedup_key(title, company, city)`
+
+⚠️ **Bug critique fixé** : `make_dedup_key` inclut maintenant la **ville**.
+Sans elle, une offre Capgemini "AI Engineer" publiée à Paris ET à Toulouse
+serait considérée comme doublon → la 2e jetée silencieusement. Pour un outil
+de recherche d'emploi où la localisation est clé, c'est inacceptable.
+
+`normalize_city_for_dedup()` normalise les variantes : "Paris" / "75 - Paris" /
+"Paris, France" / "Paris (Saint-Cloud)" → toutes "paris" (vraie dédup).
+Migration : `python -m backend.seed_recompute_dedup_keys` recalcule tous les
+dedup_key existants.
 
 ### Entreprises cibles
 Dédup à `queries.insert_target_company()` sur `(LOWER(name), LOWER(city))`. Une même entreprise sur 2 villes = 2 rows distincts (2 candidatures séparées).
+
+## Bulk inserts (performance)
+
+Pour insérer N offres scrapées, **utiliser `queries.insert_offers_bulk(payload)`** :
+- 1 seule connexion SQLite + 1 seule transaction
+- Dédup en mémoire (charge `existing_urls` et `existing_dedup_keys` une fois)
+- Gain x10-x50 sur 1000+ offres vs `insert_offer` × N (qui ouvrait/fermait la connexion à chaque appel)
+
+Signature : `insert_offers_bulk(offers: list[dict]) -> (new_ids: list[int], duplicates: int)`
 
 ## Helpers `queries.py` importants
 
@@ -119,12 +138,14 @@ Migrations passées :
 - v1 → v2 : ajout `offers.is_active`, `offers.last_checked_at`
 - v2 → v3 : ajout `target_companies.city`, `target_companies.source`
 - v3 → v4 : drop `UNIQUE INDEX idx_target_companies_name`, create `UNIQUE INDEX (name, city)`
+- v4 → v5 : signature `make_dedup_key(title, company, city)` (bug audit) + script `seed_recompute_dedup_keys`
 
 ## Scripts seed/migration one-shot
 
 - `seed_company_cities.py` : remplit `city` pour les 65 entreprises xlsx + duplique multi-villes (Airbus ×3, Capgemini ×5...)
 - `seed_high_priority_other_cities.py` : importe entreprises Haute hors-5-villes
 - `seed_toulouse_contact_methods.py` : remplit `contact_channel` optimisé pour les 40 Toulouse
+- `seed_recompute_dedup_keys.py` : **recompute des `offers.dedup_key`** avec city (fix bug audit)
 - `dedup_company_names.py` : fusion des alias (`Capgemini Engineering (ex-Altran)` → `Capgemini Engineering`)
 
 Tous sont idempotents (peuvent être relancés sans risque).

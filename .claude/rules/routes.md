@@ -110,12 +110,20 @@ uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False)
 | POST | `/api/offers/{id}/status` | Toggle rapide statut (form-encoded, pour HTMX bouton 👎) |
 | POST | `/api/scrape` | Lance scrape async (`source=all` pour multi-source, `use_playwright=true` pour SPAs) |
 | GET | `/api/scrape/status` | État du scrape en cours (running, step, total_new, deleted_dead, scoring_applied, per_source...) |
+| POST | `/api/scrape/reset` | Escape-hatch : force reset `_SCRAPE_STATE.running=False` si bloqué |
 | POST | `/api/companies/import-from-offers` | Import auto entreprises depuis offres scrapées (filtre par ville) |
 | GET | `/api/docs` | Swagger UI |
 
 ## Pattern : background tasks (scrape async)
 
-Le scrape "Tout" tourne en arrière-plan via `BackgroundTasks` et expose son état via une variable globale in-memory `_SCRAPE_STATE` :
+Le scrape "Tout" tourne en arrière-plan via `BackgroundTasks` et expose son état via une variable globale in-memory `_SCRAPE_STATE`.
+
+⚠️ **Fragilité connue (audit)** : l'état vit en RAM. Si le serveur est tué pendant
+un scrape, `running=True` reste à tout jamais. Fix appliqué :
+1. **Reset au startup** : `@app.on_event("startup")` force `running=False`
+2. **Endpoint de reset manuel** : `POST /api/scrape/reset` (escape-hatch sans restart)
+
+Le `_SCRAPE_STATE` ressemble à :
 
 ```python
 _SCRAPE_STATE: dict = {

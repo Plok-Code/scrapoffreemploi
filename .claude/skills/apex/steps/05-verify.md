@@ -31,9 +31,21 @@ Vérifier :
 - Re-lancer la migration : `$env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx`
 - Vérifier le count : `python -c "import sqlite3; print(sqlite3.connect('data/app.db').execute('SELECT COUNT(*) FROM offers').fetchone()[0])"`
 
-## 4. Si `-t` flag
+## 4. Tests pytest (par défaut si modif fonctionnelle)
 
-Écrire un test informel (script standalone qui valide les changements). Pas de framework formel pour l'instant — on en ajoutera si on en a besoin.
+```powershell
+$env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -q
+```
+
+Si la modif touche `db.py`, `queries.py`, `filter_alternance.py`, `scrapers/*`, ou `_keywords.py` → **écrire un test pytest dans `tests/test_<feature>.py`** :
+- Une classe par fonction testée
+- Fixtures HTML mockées dans `conftest.py` si besoin
+- Coverage : keep + reject + edge (None, vide, doublons)
+- Pas de network call (utiliser des fixtures statiques)
+
+Exemple : `tests/test_dedup_key.py::test_critical_bug_paris_vs_toulouse_kept` formalise une règle métier critique.
+
+Si `-t` est explicitement demandé : écrire le test même si la zone modifiée n'a pas de test existant.
 
 ## 5. Mettre à jour `CHANGELOG.md`
 

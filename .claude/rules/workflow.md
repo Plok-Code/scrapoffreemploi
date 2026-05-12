@@ -19,16 +19,31 @@
    ```powershell
    python -c "from backend.main import app; print('OK', len(app.routes))"
    ```
-2. Si modif de queries.py : tester avec une requête réelle (`curl http://localhost:8000/`)
-3. **Si l'app tourne déjà** (uvicorn en background) : la redémarrer pour charger le nouveau code
+2. **Lancer pytest** si modif touchant `db.py`, `queries.py`, `filter_alternance.py`, `scrapers/runner.py`, `scrapers/base.py`, ou `_keywords.py` :
+   ```powershell
+   $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -q
+   ```
+   83 tests, ~2 sec. Si un test casse, fixer **avant** de déclarer "done".
+3. Si modif de `queries.py` : tester aussi avec une requête réelle (`curl http://localhost:8000/`)
+4. **Si l'app tourne déjà** (uvicorn en background) : la redémarrer pour charger le nouveau code
    ```powershell
    # Kill l'ancien process puis relance
    Get-Process python | Where-Object {$_.Id -eq <PID>} | Stop-Process -Force
    Start-Process python -ArgumentList "-m","backend" -WorkingDirectory "<path>"
    ```
    Sans reload, le user voit l'ancien code et peut signaler un faux bug (`{"detail":"Not Found"}`).
-4. **Mettre à jour `CHANGELOG.md`** si changement user-facing (nouvelle route, nouvelle colonne DB, nouveau template)
-5. Reporter brièvement les fichiers touchés au user
+5. **Mettre à jour `CHANGELOG.md`** si changement user-facing (nouvelle route, nouvelle colonne DB, nouveau template)
+6. Reporter brièvement les fichiers touchés au user
+
+## Si tu ajoutes une nouvelle fonction critique (scoring, dédup, scrape...)
+
+**TOUJOURS écrire un test pytest** dans `tests/` :
+- Un fichier `tests/test_<feature>.py`
+- Une classe par fonction
+- Des fixtures HTML mockées dans `conftest.py` si besoin (jamais de network call dans les tests)
+- Coverage minimale : cas keep + cas reject + cas edge (None, vide, doublons)
+
+Exemple : voir `tests/test_dedup_key.py:test_critical_bug_paris_vs_toulouse_kept` qui formalise une règle métier.
 
 ## Quand tu doutes
 
@@ -60,5 +75,18 @@ Sinon les accents deviennent `?` ou `�`.
 - ✅ Matcher le style existant (snake_case Python, kebab-case pour les routes URL)
 - ✅ Utiliser les helpers existants (`backend/db.py`, `backend/queries.py`, `backend/models.py`)
 - ✅ Type hints Python (`str | None`, `list[dict]`, etc.) — Python 3.10+ syntax
-- ✅ Validation Pydantic pour les payloads externes (API entrée)
+- ✅ Validation Pydantic pour les payloads externes (API entrée) ET pour les objets scrapés (`RawOffer`)
+- ✅ `logger.info/warning/error` au lieu de `print()` dans les modules (loguru auto-init)
+- ✅ `tenacity` @retry pour les calls HTTP externes, pas de retry maison
+- ✅ `RateLimiter` pour les boucles d'appels HTTP (anti-ban IP)
+- ✅ `insert_offers_bulk` pour les batchs d'insertion (pas `insert_offer` × N)
 - ✅ Tester l'import du module modifié avant de déclarer "done"
+- ✅ Lancer `pytest` après modif fonctionnelle (filter, dedup, scoring, scrape...)
+
+## Ne fais JAMAIS (additionnel)
+
+- ❌ `except Exception: pass` silencieux — toujours `logger.warning("...", err=str(e))` au minimum
+- ❌ `print()` dans les modules non-CLI — `logger.X` à la place
+- ❌ Retry HTTP maison avec `time.sleep(2**i)` — utiliser `tenacity` via `get_with_retry`
+- ❌ Modifier `make_dedup_key` sans inclure la ville (bug critique : Paris vs Toulouse)
+- ❌ Lancer Playwright sans passer par `persistent_browser` (pas de lock guard)

@@ -121,12 +121,21 @@ Appelé par `POST /api/scrape` (source=all) :
 - Session unique : `httpx.Client(headers=DEFAULT_HEADERS, follow_redirects=True, http2=True)`
 - UA réaliste : `Chrome/130.0.0.0`
 - **Accept-Encoding: gzip, deflate** (PAS `br` — httpx sans la lib `brotli` reçoit du binaire)
-- `get_with_retry()` : backoff exponentiel 2^attempt sur 429/503/timeouts
+- `get_with_retry()` : décorée `@retry` de **tenacity** (4 tentatives, exponential backoff 2/4/8/16s)
+  - Retry sur : `TimeoutException`, `NetworkError`, `RemoteProtocolError`, status `429/500/502/503/504`
+  - Log `error` sur `RetryError` (retries épuisés)
+- `RateLimiter(min_delay, max_delay)` : pauses **uniformes aléatoires** entre requêtes (anti-fingerprint)
+  - `DEFAULT_RATE_LIMITER` : 1.0-2.5s par défaut
+  - `rl.acquire()` avant chaque requête HTTP
+- `polite_sleep(seconds)` : sleep simple avec jitter ±20% (compat ancienne API)
 
 ### Playwright (`_playwright.py`)
 - `persistent_browser(headless=True, slow_mo=0)` : context dir `data/.playwright_profile/`
 - Args : `--disable-blink-features=AutomationControlled`
-- Utilisé pour : LinkedIn loggué, fallback SPA dans company_portals
+- **Lock guard** : `_is_profile_locked()` check `SingletonLock` / `lockfile` / `SingletonSocket`
+  - Raise `PlaywrightProfileLocked` si profil déjà ouvert (double-clic Scraper)
+  - Param `wait_for_lock_release=10.0` pour attendre la libération
+- Utilisé pour : LinkedIn loggué, fallback SPA dans `company_portals` (mode lent)
 
 ### Mots-clés (`_keywords.py`)
 Toutes les regex compilées en une seule fois via OR. `matches_keywords(*texts)` vérifie ≥ 1 match.

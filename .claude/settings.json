@@ -34,7 +34,13 @@
       "Edit(data/source/candidatures_alternance_AI_Engineer.xlsx)",
       "Edit(./data/source/candidatures_alternance_AI_Engineer.xlsx)",
       "Write(data/source/candidatures_alternance_AI_Engineer.xlsx)",
-      "Write(./data/source/candidatures_alternance_AI_Engineer.xlsx)"
+      "Write(./data/source/candidatures_alternance_AI_Engineer.xlsx)",
+      "Edit(.env)",
+      "Edit(./.env)",
+      "Write(.env)",
+      "Write(./.env)",
+      "Bash(rm -rf data/.playwright_profile*)",
+      "PowerShell(Remove-Item data/.playwright_profile*)"
     ]
   }
 }

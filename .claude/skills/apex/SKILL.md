@@ -13,7 +13,7 @@ arguments:
       Optional flags:
       -a / --auto       Skip user confirmations (fully autonomous)
       -b / --branch     Create a git branch (only if .git exists)
-      -t / --test       Write tests (informal — there are no formal tests yet)
+      -t / --test       Write pytest tests in tests/ (recommended)
       -s / --save       Save intermediate artifacts to .claude/.tmp/
       --no-plan         Skip plan mode (for clearer / simpler features)
     required: false

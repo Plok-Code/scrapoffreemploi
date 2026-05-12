@@ -30,6 +30,24 @@ $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 # OU directement :
 python -m backend
 # → http://localhost:8000
+
+# Tests pytest (83 tests, ~2 sec, sans network)
+$env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -v
+
+# Logs (rotation auto 10MB, 7 fichiers gz)
+Get-Content data\logs\app.log -Tail 30 -Wait
+Get-Content data\logs\errors.log -Tail 50
+
+# CLI utiles
+python cli.py stats                                    # KPIs DB
+python cli.py scrape <source> [--max-pages N]          # scrape un job board
+python cli.py check-alive [--min-score N]              # ping URLs + delete/archive mortes
+python cli.py enrich-descriptions [--source X]         # re-fetch desc manquantes
+python cli.py export-batch [--only-unscored]           # batch JSON pour scoring manuel
+python cli.py apply-scores <path>                      # applique scores JSON
+python -m backend.heuristic_scorer [--rescore]         # scoring auto sur unscored
+python -m backend.filter_alternance [--dry-run]        # filtre CDI/Senior/stage
+python -m backend.seed_recompute_dedup_keys            # migration dedup_key + city
 ```
 
 ## Architecture
@@ -38,24 +56,26 @@ python -m backend
 scrapoffreemploi/
 ├── backend/
 │   ├── __main__.py             # python -m backend → uvicorn
-│   ├── main.py                 # FastAPI app + routes web/API (17 routes)
-│   ├── db.py                   # connexion SQLite + migrations conditionnelles
+│   ├── main.py                 # FastAPI app + routes web/API (18 routes)
+│   ├── db.py                   # connexion SQLite + migrations + make_dedup_key(t,c,city)
 │   ├── schema.sql              # DDL : offers + target_companies + scrape_runs
 │   ├── models.py               # Pydantic + constantes (statuts, labels, etc.)
-│   ├── queries.py              # CRUD + filtres + stats (offers + target_companies)
+│   ├── queries.py              # CRUD + filtres + stats + insert_offers_bulk
 │   ├── migrate_xlsx.py         # one-shot xlsx -> SQLite (préserve le xlsx)
 │   ├── matching.py             # export batch JSON pour scoring + apply scores
+│   ├── _logging.py             # loguru centralisé (3 sinks : console + app.log + errors.log)
 │   ├── heuristic_scorer.py     # scoring auto v2 (mots-clés par axe + pénalités)
 │   ├── filter_alternance.py    # filtre auto non-alternance (delete + archive)
 │   ├── seed_company_cities.py  # one-shot : remplit city + multi-villes
 │   ├── seed_high_priority_other_cities.py  # one-shot : Hautes hors-5-villes
 │   ├── seed_toulouse_contact_methods.py    # one-shot : canaux contact Toulouse
+│   ├── seed_recompute_dedup_keys.py        # one-shot : recompute dedup_key avec city
 │   ├── dedup_company_names.py  # one-shot : fusion alias (Capgemini Eng (ex-Altran))
 │   ├── scrapers/               # 1 module par source/SaaS
-│   │   ├── _http.py            # session httpx (UA Chrome, retry, no brotli)
+│   │   ├── _http.py            # session httpx (UA Chrome) + tenacity + RateLimiter
 │   │   ├── _keywords.py        # regex IA/ML/DL/LLM/data
-│   │   ├── _playwright.py      # persistent_browser pour scrape loggué
-│   │   ├── base.py             # ABC Scraper + RawOffer
+│   │   ├── _playwright.py      # persistent_browser + lock guard (PlaywrightProfileLocked)
+│   │   ├── base.py             # ABC Scraper + Pydantic RawOffer (validation stricte)
 │   │   ├── registry.py         # SCRAPERS dict
 │   │   ├── runner.py           # run_scrape + check_alive + cleanup + full_scrape
 │   │   ├── _generic.py         # GenericScraper (multi-fallback HTML)
@@ -66,12 +86,23 @@ scrapoffreemploi/
 │   │   ├── company_portals.py  # Workable / Lever / Workday / Greenhouse / Taleez / Phenom / Playwright
 │   │   └── labonneboite.py     # LBB v2 (bloqué 403, habilitation FT requise)
 │   ├── templates/              # Jinja : base, offers, offer_detail, companies, company_detail
+├── tests/                      # pytest avec mocks HTML (83 tests, ~2 sec)
+│   ├── conftest.py             # fixtures HTML (Workday dead, AXA redirect, Doctolib alive)
+│   ├── test_keywords.py        # 15 tests : matches_keywords
+│   ├── test_filter_alternance.py  # 14 tests : classify_offer
+│   ├── test_soft_404.py        # 8 tests : _is_soft_404 (4 niveaux)
+│   ├── test_dedup_key.py       # 9 tests : make_dedup_key (incl. Paris vs Toulouse)
+│   ├── test_raw_offer.py       # 10 tests : Pydantic RawOffer validation
+│   ├── test_bulk_insert.py     # 8 tests : insert_offers_bulk (DB temp)
+│   └── test_playwright_lock.py # 6 tests : _is_profile_locked
 │   └── static/                 # CSS minimal (Tailwind via CDN)
 ├── data/                       # gitignored
 │   ├── app.db                  # SQLite, source de vérité
 │   ├── batches/                # JSON offres à scorer (échange avec moi)
+│   ├── logs/                   # loguru rotation (app.log + errors.log + .gz archives)
 │   ├── scrapes/                # raw outputs scraping par run
 │   ├── exports/                # xlsx générés à la demande
+│   ├── .playwright_profile/    # profil Chromium persistant (cookies LinkedIn, etc.)
 │   └── companies_spontaneous_extracted.json  # 71 entreprises cibles (phase 2)
 ├── docs/                       # ARCHITECTURE / CRITERIA / SOURCES (à venir)
 ├── reference/
@@ -85,8 +116,8 @@ scrapoffreemploi/
 
 Quand tu travailles sur :
 - **Le schéma DB** → `backend/schema.sql` (offers + target_companies + scrape_runs)
-- **Une requête SQL** → `backend/queries.py` (toujours passer par là, jamais d'inline SQL ailleurs)
-- **Une route HTTP** → `backend/main.py` (17 routes ; splitter si > 200 lignes via APIRouter)
+- **Une requête SQL** → `backend/queries.py` (toujours passer par là, jamais d'inline SQL ailleurs) — utiliser `insert_offers_bulk` pour les batchs
+- **Une route HTTP** → `backend/main.py` (18 routes ; splitter si > 200 lignes via APIRouter)
 - **Le scoring LLM manuel** → `backend/matching.py` + `backend/models.py` (workflow batch JSON)
 - **Le scoring auto heuristique** → `backend/heuristic_scorer.py` (mots-clés par axe + pénalités CDI/Senior)
 - **Le filtre alternance** → `backend/filter_alternance.py` (delete/archive non-alternance, appliqué auto à chaque scrape)
@@ -94,11 +125,14 @@ Quand tu travailles sur :
 - **Un nouveau scraper SaaS RH** → `backend/scrapers/company_portals.py` (dispatcher Workable/Lever/Workday/Greenhouse/Taleez/Phenom/Playwright)
 - **La migration xlsx** → `backend/migrate_xlsx.py` (NE PAS toucher au xlsx original)
 - **Une vue HTML** → `backend/templates/{offers, offer_detail, companies, company_detail}.html`
+- **Logging** → `backend/_logging.py` (loguru, init dans `main.py`, sortie dans `data/logs/`)
+- **Tests** → `tests/` (pytest + fixtures HTML mockées, jamais de network call)
+- **dedup_key** → `backend/db.py:make_dedup_key(title, company, city)` — la **ville fait partie de la clé** (bug critique fix : Paris vs Toulouse ≠ doublons)
 
 ## Données du projet
 
-État au 12 mai 2026 (après scraping massif + filtres) :
-- **~900 offres actives** dans `data/app.db` (table `offers`), score Top/Bon/Moyen/Faible
+État au 12 mai 2026 (après scraping mode lent complet + filtres) :
+- **1120 offres actives** dans `data/app.db` (5 Top, 170 Bon, ~280 Moyen, ~665 Faible)
 - **~260 entreprises cibles** dans `target_companies` :
   - 65 initiales du xlsx historique (priorité Haute/Moyenne/Basse, 36 Haute)
   - +128 importées depuis offres scrapées via les 5 villes cibles
@@ -111,12 +145,21 @@ Quand tu travailles sur :
 
 ## Règles non-négociables
 
-1. **JAMAIS toucher au xlsx** `data/source/candidatures_alternance_AI_Engineer.xlsx` — lecture seule uniquement. Si tu dois modifier des données, fais-le dans SQLite. (Le xlsx est conservé pour audit et migration ; la SQLite est la source de vérité vivante.)
-2. **JAMAIS d'API Anthropic** — pas de clé. Le scoring LLM passe par ce chat Claude Code Max (workflow batch ci-dessous).
-3. **Toujours passer par `queries.py`** pour les accès DB — pas de SQL inline dans `main.py` ou les templates.
-4. **Mojibake** : les fichiers source du xlsx avaient des problèmes d'encodage (cp1252). La fonction `fix_mojibake()` dans `migrate_xlsx.py` gère ça — réutiliser si nouveau import.
-5. **Encoding PowerShell** : pour les print Unicode, toujours `$env:PYTHONIOENCODING="utf-8"` avant les commandes Python sinon les `é` deviennent `?`.
-6. **Pas de Node.js, pas de build step** — si tu envisages d'ajouter du React/Vite/Webpack, STOP et propose une alternative en HTMX/Jinja.
+1. **JAMAIS toucher au xlsx** `data/source/candidatures_alternance_AI_Engineer.xlsx` — lecture seule uniquement. Si tu dois modifier des données, fais-le dans SQLite.
+2. **JAMAIS d'API Anthropic** — pas de clé. Le scoring LLM manuel passe par ce chat Claude Code Max (workflow batch). Le scoring auto utilise des heuristiques sans LLM.
+3. **Toujours passer par `queries.py`** pour les accès DB — pas de SQL inline dans `main.py` ou les templates. Pour les batchs, utiliser `insert_offers_bulk` (1 transaction).
+4. **dedup_key inclut la ville** : `make_dedup_key(title, company, city)`. Une même offre à Paris vs Toulouse = 2 inserts distincts.
+5. **JAMAIS `except Exception: pass`** silencieux — toujours `logger.warning/error` avec le contexte (offer_id, url, etc.).
+6. **`print()` interdit dans les modules non-CLI** — utiliser `logger.info/warning/error/debug` (loguru auto-init dans main.py).
+7. **Pydantic pour les inputs externes** — `RawOffer` (BaseModel) valide chaque offre scrapée avant insertion.
+8. **`tenacity` pour les retries** — pas de retry maison, utiliser `get_with_retry` de `_http.py`.
+9. **`RateLimiter` aléatoire entre requêtes** — `DEFAULT_RATE_LIMITER` ou instance dédiée par scraper.
+10. **Playwright lock guard** — toujours passer par `persistent_browser` qui check le `SingletonLock` avant d'ouvrir.
+11. **Mojibake** : `fix_mojibake()` dans `migrate_xlsx.py` (cp1252 → utf-8).
+12. **Encoding PowerShell** : `$env:PYTHONIOENCODING="utf-8"` avant les commandes Python qui affichent du français.
+13. **Pas de Node.js, pas de build step** — si tu envisages d'ajouter du React/Vite/Webpack, STOP et propose HTMX/Jinja.
+14. **Tester l'import après modif** : `python -c "from backend.main import app; print('OK', len(app.routes))"` + `python -m pytest tests/ -q`.
+15. **Redémarrer uvicorn après modif** (si l'app tourne en background) sinon l'utilisateur voit l'ancien code.
 
 ## Workflow scoring LLM (spécifique à ce projet)
 

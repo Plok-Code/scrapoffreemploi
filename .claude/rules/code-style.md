@@ -8,8 +8,8 @@
 - **Max line** : 100 chars indicatif (pas strict)
 - **Imports** ordre :
   1. stdlib (`from __future__ import annotations` en premier si annotations)
-  2. third-party (`fastapi`, `pydantic`, `openpyxl`, etc.)
-  3. local `from backend.x import y`
+  2. third-party (`fastapi`, `pydantic`, `httpx`, `tenacity`, `loguru`, etc.)
+  3. local `from backend.x import y` (`_logging` en premier des locaux)
 
 ```python
 """Docstring module (1 ligne max)."""
@@ -20,7 +20,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from openpyxl import load_workbook
+from tenacity import retry, stop_after_attempt, wait_exponential
 
+from backend._logging import logger
 from backend import queries
 from backend.db import db
 ```
@@ -44,8 +46,66 @@ from backend.db import db
 
 - Lever `HTTPException(404, "message")` pour les erreurs HTTP attendues
 - Laisser remonter les exceptions inattendues (FastAPI les gère)
-- Pas de `try/except: pass` silencieux
+- **JAMAIS `try/except: pass` silencieux** — toujours `logger.warning("...", err=str(e))` au minimum
+- Si on veut le traceback complet : `logger.opt(exception=True).debug("...")` (loguru capture la stack)
 - Pour les opérations DB : laisser remonter sauf cas connu (ex: contrainte UNIQUE)
+
+## Logging (loguru)
+
+```python
+from backend._logging import logger
+
+# Niveaux
+logger.debug("Détail verbeux pour debug (chaque requête HTTP)")
+logger.info("Événement normal : Scrape FT terminé, {n} nouvelles", n=42)
+logger.warning("Anomalie non bloquante : URL morte {url}", url=u)
+logger.error("Échec d'une opération : {err}", err=str(e))
+logger.critical("Panne grave : DB inaccessible")
+
+# Avec stacktrace (catch silencieux mais on garde la trace)
+try:
+    risky()
+except Exception as e:
+    logger.warning("Op KO : {err}", err=str(e))
+    logger.opt(exception=True).debug("Traceback complet")
+```
+
+Sortie : `data/logs/app.log` (INFO+) + `data/logs/errors.log` (ERROR+). Rotation auto.
+
+## HTTP / Resilience (tenacity)
+
+```python
+from backend.scrapers._http import get_with_retry, http_client, DEFAULT_RATE_LIMITER
+
+# Retries auto (exponential backoff 2/4/8/16s sur 429/500/timeout)
+with http_client() as client:
+    DEFAULT_RATE_LIMITER.acquire()  # pause aléatoire 1.0-2.5s
+    resp = get_with_retry(client, url)
+```
+
+Pour un scraper avec sa propre cadence : `RateLimiter(min_delay=0.5, max_delay=1.5)`.
+
+## Validation (Pydantic)
+
+Pour les inputs externes (API, scrape) : utiliser `BaseModel`, pas `@dataclass`.
+
+```python
+from pydantic import BaseModel, Field, field_validator
+
+class RawOffer(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+    title: str = Field(min_length=1)
+    company: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("title is empty")
+        return v.strip()
+```
+
+Si un scraper renvoie un titre vide / un type incohérent, Pydantic catch immédiatement → pas de pollution DB.
 
 ## SQL (dans queries.py)
 
@@ -83,7 +143,13 @@ def list_x(*, filter_a: str = "") -> list[dict]:
 ## Anti-patterns à éviter
 
 - ❌ `from x import *` (sauf cas justifié)
-- ❌ Strings concaténées pour le SQL (utiliser params)
-- ❌ Globals mutables (préférer constantes ou config)
+- ❌ Strings concaténées pour le SQL (utiliser params nommés `:name`)
+- ❌ Globals mutables (préférer constantes ou config) — `_SCRAPE_STATE` est l'exception assumée
 - ❌ Fonctions de >50 lignes (extraire des helpers)
-- ❌ Réimplémenter ce qui existe dans `queries.py` / `db.py` / `models.py`
+- ❌ Réimplémenter ce qui existe dans `queries.py` / `db.py` / `models.py` / `_logging.py` / `_http.py`
+- ❌ `print()` dans les modules non-CLI (utiliser `logger.X`)
+- ❌ `time.sleep(2)` en boucle pour retry (utiliser `tenacity`)
+- ❌ `@dataclass` pour les inputs externes (utiliser `BaseModel` Pydantic pour validation)
+- ❌ `except Exception: pass` (catch ET logger, sinon laisser remonter)
+- ❌ Pour le scraping : pas de `requests` synchrones séquentielles sans `RateLimiter` (anti-ban IP)
+- ❌ `make_dedup_key` sans city — la ville fait partie de la clé (bug audit)

@@ -41,7 +41,10 @@ Si pendant l'exécution tu réalises que :
 
 ## Toujours
 
-- ✅ Smoke test rapide après modif
+- ✅ Smoke test rapide après modif (`python -c "from backend.main import app; print('OK', len(app.routes))"`)
+- ✅ Si modif fonctionnelle (filter, dedup, scoring, scrape) : `python -m pytest tests/ -q`
+- ✅ Si app tourne déjà : redémarrer uvicorn (sinon user voit l'ancien code = faux "Not Found")
 - ✅ Bref rapport au user
 - ✅ Mettre à jour `CHANGELOG.md` si user-facing (ne pas demander à Claude pour ça — c'est inclus)
 - ✅ Encoding PowerShell si commande Python avec accents : `$env:PYTHONIOENCODING="utf-8";`
+- ✅ Utiliser `logger.X` jamais `print()` dans les modules
