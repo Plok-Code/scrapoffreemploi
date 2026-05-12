@@ -292,6 +292,7 @@ def list_target_companies(
     priority: str = "",
     status: str = "",
     city: str = "",
+    other_haute: bool = False,
     sort: str = "priority",
     limit: int = 500,
 ) -> list[dict]:
@@ -299,6 +300,10 @@ def list_target_companies(
 
     Le filtre `city` accepte une sous-chaîne (LIKE) — utile pour matcher
     "Toulouse" ou "31 - Toulouse" etc.
+
+    `other_haute=True` : tab spécial = entreprises priorité Haute dans les villes
+    hors les 5 cibles (Toulouse/Bordeaux/Pau/Paris/Nancy). Permet de voir les
+    pépites Haute partout en France.
     """
     where = []
     params: list[Any] = []
@@ -319,6 +324,11 @@ def list_target_companies(
     if city:
         where.append("LOWER(city) LIKE ?")
         params.append(f"%{city.lower()}%")
+    if other_haute:
+        where.append("priority = 'Haute'")
+        for p in TARGET_CITIES:
+            where.append("LOWER(COALESCE(city, '')) NOT LIKE ?")
+            params.append(f"%{p.lower()}%")
 
     sql = "SELECT * FROM target_companies"
     if where:
@@ -365,6 +375,18 @@ def count_companies_per_target_city() -> list[dict]:
             ).fetchone()["n"]
             results.append({"name": city, "count": n})
     return results
+
+
+def count_other_haute() -> int:
+    """Compte les entreprises priorité Haute dans des villes hors-5-cibles."""
+    where_parts = ["priority = 'Haute'"]
+    params: list = []
+    for c in TARGET_CITIES:
+        where_parts.append("LOWER(COALESCE(city, '')) NOT LIKE ?")
+        params.append(f"%{c.lower()}%")
+    sql = f"SELECT COUNT(*) AS n FROM target_companies WHERE {' AND '.join(where_parts)}"
+    with db() as conn:
+        return conn.execute(sql, params).fetchone()["n"]
 
 
 def extract_companies_from_offers_by_city(

@@ -133,15 +133,18 @@ def page_companies(
     priority: str = "",
     status: str = "",
     city: str = "",
+    other_haute: bool = False,
     sort: str = "priority",
 ):
     companies = queries.list_target_companies(
-        search=search, priority=priority, status=status, city=city, sort=sort
+        search=search, priority=priority, status=status,
+        city=city, other_haute=other_haute, sort=sort,
     )
     stats = queries.get_company_stats()
     priorities = queries.list_company_priorities()
     cities = queries.list_company_cities()
     target_cities = queries.count_companies_per_target_city()
+    other_haute_count = queries.count_other_haute()
     return templates.TemplateResponse(
         "companies.html",
         {
@@ -151,12 +154,14 @@ def page_companies(
             "priorities": priorities,
             "cities": cities,
             "target_cities": target_cities,
+            "other_haute_count": other_haute_count,
             "statuses": VALID_COMPANY_STATUSES,
             "filters": {
                 "search": search,
                 "priority": priority,
                 "status": status,
                 "city": city,
+                "other_haute": other_haute,
                 "sort": sort,
             },
             "page": "companies",

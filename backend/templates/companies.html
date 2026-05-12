@@ -101,11 +101,11 @@
     </div>
 </div>
 
-<!-- Tabs des villes cibles -->
+<!-- Tabs des villes cibles + onglet "Autres villes (Haute)" -->
 <div class="bg-white border border-slate-200 rounded mb-4 px-3 py-2 flex flex-wrap items-center gap-1">
     <span class="text-xs text-slate-500 uppercase tracking-wide mr-2">Villes cibles :</span>
     <a href="/companies"
-       class="px-3 py-1 text-sm rounded {% if not filters.city %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+       class="px-3 py-1 text-sm rounded {% if not filters.city and not filters.other_haute %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
         Toutes ({{ stats.total }})
     </a>
     {% for vc in target_cities %}
@@ -114,6 +114,12 @@
             {{ vc.name }} ({{ vc.count }})
         </a>
     {% endfor %}
+    <span class="text-slate-300 mx-1">|</span>
+    <a href="/companies?other_haute=true"
+       class="px-3 py-1 text-sm rounded {% if filters.other_haute %}bg-rose-700 text-white{% else %}text-rose-700 border border-rose-200 hover:bg-rose-50{% endif %}"
+       title="Entreprises Haute priorité dans les autres villes France">
+        🇫🇷 Autres villes Haute ({{ other_haute_count }})
+    </a>
 </div>
 
 <!-- Filtres -->
