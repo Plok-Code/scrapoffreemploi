@@ -197,7 +197,7 @@
                 <td class="px-3 py-2 text-slate-700 text-xs">{{ c.city or "—" }}</td>
                 <td class="px-3 py-2">
                     {% if c.source_url %}
-                        <a href="{{ c.source_url }}" target="_blank" rel="noopener"
+                        <a href="{{ c.source_url | safe_href }}" target="_blank" rel="noopener noreferrer"
                            class="text-xs text-blue-600 hover:underline">Portail ↗</a>
                     {% else %}
                         <span class="text-xs text-slate-400">—</span>

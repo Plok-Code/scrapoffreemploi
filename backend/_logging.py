@@ -40,7 +40,11 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "data" / "logs"
 
 
-def init_logging(level: str = "INFO", quiet_console: bool = False) -> None:
+def init_logging(
+    level: str = "INFO",
+    quiet_console: bool = False,
+    diagnose: bool | None = None,
+) -> None:
     """Configure les sinks loguru (console + fichiers rotatifs).
 
     Idempotent : peut être appelé plusieurs fois sans dupliquer les handlers.
@@ -48,6 +52,11 @@ def init_logging(level: str = "INFO", quiet_console: bool = False) -> None:
     Args:
         level: niveau minimum pour la console (DEBUG/INFO/WARNING/ERROR).
         quiet_console: si True, supprime le sink console (utile pour les tests).
+        diagnose: si True, loguru capture les valeurs des variables locales dans
+            la stacktrace (pratique pour debug, MAIS peut exposer des secrets si
+            une variable contient un token). Par défaut auto :
+            - DEBUG console → diagnose=True
+            - INFO+ console → diagnose=False (safe, locals non écrites en fichier)
 
     Fichiers générés (dans `data/logs/`) :
     - `app.log` : tous les events INFO+ (rotation 10 MB, 7 fichiers gardés)
@@ -56,6 +65,10 @@ def init_logging(level: str = "INFO", quiet_console: bool = False) -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
+
+    # Décide diagnose auto si non spécifié
+    if diagnose is None:
+        diagnose = level.upper() == "DEBUG"
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -93,6 +106,7 @@ def init_logging(level: str = "INFO", quiet_console: bool = False) -> None:
     )
 
     # Sink 3 : fichier d'erreurs uniquement (utile pour audit)
+    # diagnose=False par défaut (locals des variables exposées sinon, risque secrets)
     logger.add(
         LOG_DIR / "errors.log",
         level="ERROR",
@@ -108,7 +122,7 @@ def init_logging(level: str = "INFO", quiet_console: bool = False) -> None:
             "{exception}"
         ),
         backtrace=True,
-        diagnose=True,
+        diagnose=diagnose,  # par défaut False (sauf si level=DEBUG ou explicite)
     )
 
     _INITIALIZED = True

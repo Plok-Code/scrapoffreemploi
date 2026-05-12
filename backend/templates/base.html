@@ -4,8 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Scrap'Offre Emploi{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    {# Tailwind CDN : bundle dynamique (pas de SRI possible car le hash change
+       à chaque release). Acceptable pour usage personnel local. Pour un usage
+       prod, télécharger Tailwind localement et servir via /static. #}
+    <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
+    {# HTMX 2.0.4 : version pinnée, SRI calculée via httpx + sha384 #}
+    <script src="https://unpkg.com/htmx.org@2.0.4"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
@@ -103,56 +109,77 @@
         {% block content %}{% endblock %}
     </main>
 
-    <!-- Petite JS pour formater le statut JSON de scrape -->
+    <!-- JS minimal : formate le statut JSON de scrape sans injection HTML.
+         Construit l'arbre DOM via createElement/textContent (XSS-safe) au
+         lieu d'innerHTML avec concaténation de strings. -->
     <script>
+        // Helper : crée un élément <tag class=cls> avec du textContent (PAS innerHTML)
+        function el(tag, cls, text) {
+            const n = document.createElement(tag);
+            if (cls) n.className = cls;
+            if (text !== undefined && text !== null) n.textContent = String(text);
+            return n;
+        }
+
+        function renderScrapeStatus(json) {
+            const frag = document.createDocumentFragment();
+            if (json.running) {
+                const src = String(json.source || 'scrape');
+                const step = String(json.step || 'en cours');
+                frag.appendChild(el('div', 'text-amber-700', '⏳ ' + src + ' — ' + step + '…'));
+                return frag;
+            }
+            if (!json.finished_at) {
+                frag.appendChild(el('div', 'text-slate-400', 'Aucun scrape lancé pour le moment.'));
+                return frag;
+            }
+            if (json.error) {
+                frag.appendChild(el('div', 'text-rose-700', '❌ Erreur : ' + String(json.error)));
+                return frag;
+            }
+            frag.appendChild(el('div', 'text-emerald-700 font-medium',
+                '✅ ' + String(json.source || 'Scrape') + ' terminé'));
+            const stats = el('div', 'text-slate-600 mt-1');
+            stats.appendChild(el('div', null, '• Fetched : ' + (json.total_fetched || 0)));
+            const newDiv = el('div', null, '• Nouvelles : ');
+            const strong = el('strong', null, json.total_new || 0);
+            newDiv.appendChild(strong);
+            stats.appendChild(newDiv);
+            stats.appendChild(el('div', null, '• Doublons : ' + (json.total_duplicates || 0)));
+            if (json.deleted_dead > 0)
+                stats.appendChild(el('div', null, '• 🗑 Supprimées (URL morte + sans statut) : ' + json.deleted_dead));
+            if (json.archived_dead > 0)
+                stats.appendChild(el('div', null, '• 📦 Archivées (URL morte + avec statut) : ' + json.archived_dead));
+            if (json.portals_attempted > 0) {
+                let p = '• 🏢 Portails entreprises scrapés : ' + json.portals_attempted;
+                if (json.portals_offers_inserted !== undefined)
+                    p += ' (' + json.portals_offers_inserted + ' offres ins.)';
+                stats.appendChild(el('div', null, p));
+            }
+            if (json.non_alternance_removed > 0)
+                stats.appendChild(el('div', null, '• 🚫 Filtre non-alternance : ' + json.non_alternance_removed + ' offres retirées'));
+            if (json.scoring_applied > 0)
+                stats.appendChild(el('div', null, '• 🎯 Scoring auto appliqué : ' + json.scoring_applied + ' offres'));
+            if (json.per_source && Object.keys(json.per_source).length > 0) {
+                stats.appendChild(el('div', 'mt-1 text-slate-500', 'Détail :'));
+                for (const [src, s] of Object.entries(json.per_source)) {
+                    // src + s.new + s.fetched sont passés via textContent (XSS-safe)
+                    stats.appendChild(el('div', 'ml-2',
+                        String(src) + ' : ' + (s.new || 0) + ' nouvelles / ' + (s.fetched || 0) + ' fetched'));
+                }
+            }
+            frag.appendChild(stats);
+            return frag;
+        }
+
         document.body.addEventListener('htmx:afterRequest', function(evt) {
             const target = evt.detail.target;
             if (target && target.id === 'scrape-status' && evt.detail.xhr) {
                 try {
                     const json = JSON.parse(evt.detail.xhr.responseText);
-                    let html = '';
-                    if (json.running) {
-                        html = '<div class="text-amber-700">⏳ ' + (json.source || 'scrape') + ' — ' + (json.step || 'en cours') + '…</div>';
-                    } else if (json.finished_at) {
-                        if (json.error) {
-                            html = '<div class="text-rose-700">❌ Erreur : ' + json.error + '</div>';
-                        } else {
-                            html = '<div class="text-emerald-700 font-medium">✅ ' + (json.source || 'Scrape') + ' terminé</div>';
-                            html += '<div class="text-slate-600 mt-1">';
-                            html += '• Fetched : ' + (json.total_fetched || 0) + '<br>';
-                            html += '• Nouvelles : <strong>' + (json.total_new || 0) + '</strong><br>';
-                            html += '• Doublons : ' + (json.total_duplicates || 0) + '<br>';
-                            if (json.deleted_dead !== undefined && json.deleted_dead > 0) {
-                                html += '• 🗑 Supprimées (URL morte + sans statut) : ' + json.deleted_dead + '<br>';
-                            }
-                            if (json.archived_dead !== undefined && json.archived_dead > 0) {
-                                html += '• 📦 Archivées (URL morte + avec statut) : ' + json.archived_dead + '<br>';
-                            }
-                            if (json.portals_attempted !== undefined && json.portals_attempted > 0) {
-                                html += '• 🏢 Portails entreprises scrapés : ' + json.portals_attempted;
-                                if (json.portals_offers_inserted !== undefined) {
-                                    html += ' (' + json.portals_offers_inserted + ' offres ins.)';
-                                }
-                                html += '<br>';
-                            }
-                            if (json.non_alternance_removed !== undefined && json.non_alternance_removed > 0) {
-                                html += '• 🚫 Filtre non-alternance (CDI/CDD/stage seul) : ' + json.non_alternance_removed + ' offres retirées<br>';
-                            }
-                            if (json.scoring_applied !== undefined && json.scoring_applied > 0) {
-                                html += '• 🎯 Scoring auto appliqué : ' + json.scoring_applied + ' offres<br>';
-                            }
-                            if (json.per_source && Object.keys(json.per_source).length > 0) {
-                                html += '<div class="mt-1 text-slate-500">Détail :</div>';
-                                for (const [src, s] of Object.entries(json.per_source)) {
-                                    html += '<div class="ml-2">' + src + ' : ' + s.new + ' nouvelles / ' + s.fetched + ' fetched</div>';
-                                }
-                            }
-                            html += '</div>';
-                        }
-                    } else {
-                        html = '<div class="text-slate-400">Aucun scrape lancé pour le moment.</div>';
-                    }
-                    target.innerHTML = html;
+                    // Nettoie + rebuild via DOM API (pas d'innerHTML)
+                    while (target.firstChild) target.removeChild(target.firstChild);
+                    target.appendChild(renderScrapeStatus(json));
                 } catch (e) { /* leave as is */ }
             }
         });

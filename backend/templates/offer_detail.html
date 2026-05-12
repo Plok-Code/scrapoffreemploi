@@ -43,7 +43,7 @@
                 {% endif %}
             </div>
             {% if offer.url %}
-                <a href="{{ offer.url }}" target="_blank" rel="noopener"
+                <a href="{{ offer.url | safe_href }}" target="_blank" rel="noopener noreferrer"
                    class="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
                     Voir l'offre originale ↗
                 </a>

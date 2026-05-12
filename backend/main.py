@@ -4,9 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend import queries
 from backend._logging import init_logging, logger
@@ -26,6 +27,86 @@ BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Scrap'Offre Emploi", docs_url="/api/docs")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+def _safe_href(url: str | None) -> str:
+    """Filtre Jinja : retourne `url` si http(s)://, sinon `#`.
+
+    Défense en profondeur : même si une URL avec schéma dangereux (javascript:,
+    data:, file:) arrive en DB depuis un vieux scrape, elle ne sera pas rendue
+    en clickable. Utiliser dans les templates : `{{ offer.url | safe_href }}`.
+    """
+    if not url:
+        return "#"
+    url = str(url).strip()
+    lo = url.lower()
+    if lo.startswith("http://") or lo.startswith("https://"):
+        return url
+    return "#"
+
+
+templates.env.filters["safe_href"] = _safe_href
+
+
+# --- CSRF light : check Origin/Referer sur les routes mutantes ---
+
+# Origins acceptés pour les requêtes mutantes (POST/PATCH/PUT/DELETE).
+# L'app bind sur 127.0.0.1:8000, donc seules ces origins doivent valider.
+_ALLOWED_ORIGINS = {
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+}
+
+
+class CSRFOriginMiddleware(BaseHTTPMiddleware):
+    """Bloque les POST/PATCH/PUT/DELETE qui viennent d'une origin externe.
+
+    Protection légère contre les "CSRF via page web malveillante visitée
+    localement qui tente un POST localhost:8000".
+
+    Règle :
+    - GET/HEAD/OPTIONS : passent toujours
+    - Mutants sans `Origin` ni `Referer` : passent (HTMX / curl en CLI / Swagger UI)
+    - Mutants avec `Origin` : doit être dans `_ALLOWED_ORIGINS`
+    - Mutants avec `Referer` : doit pointer vers une origin allowed
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        method = request.method.upper()
+        if method in {"GET", "HEAD", "OPTIONS"}:
+            return await call_next(request)
+        origin = request.headers.get("origin", "").rstrip("/")
+        if origin:
+            if origin not in _ALLOWED_ORIGINS:
+                logger.warning(
+                    "CSRF block : {m} {p} origin={o}",
+                    m=method, p=request.url.path, o=origin,
+                )
+                return JSONResponse(
+                    {"detail": f"Origin '{origin}' non autorisée pour les mutations."},
+                    status_code=403,
+                )
+            return await call_next(request)
+        # Pas d'Origin : on regarde Referer
+        referer = request.headers.get("referer", "")
+        if referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            ref_origin = f"{parsed.scheme}://{parsed.netloc}"
+            if ref_origin not in _ALLOWED_ORIGINS:
+                logger.warning(
+                    "CSRF block : {m} {p} referer={r}",
+                    m=method, p=request.url.path, r=referer,
+                )
+                return JSONResponse(
+                    {"detail": f"Referer '{ref_origin}' non autorisée pour les mutations."},
+                    status_code=403,
+                )
+        # Ni Origin ni Referer : on accepte (curl, Swagger UI, scripts CLI)
+        return await call_next(request)
+
+
+app.add_middleware(CSRFOriginMiddleware)
 
 
 @app.on_event("startup")

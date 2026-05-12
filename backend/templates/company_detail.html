@@ -69,7 +69,7 @@
 
         {% if company.source_url %}
         <section class="mt-4">
-            <a href="{{ company.source_url }}" target="_blank" rel="noopener"
+            <a href="{{ company.source_url | safe_href }}" target="_blank" rel="noopener noreferrer"
                class="inline-block text-sm text-blue-600 hover:underline">
                 Portail officiel ↗
             </a>

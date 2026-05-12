@@ -61,15 +61,21 @@ class RawOffer(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_basic_check(cls, v: Optional[str]) -> Optional[str]:
-        """URL : on accepte None ou un str ressemblant à une URL http(s)."""
+        """URL : http(s):// obligatoire. Rejette les autres schémas (file:, javascript:, data:).
+
+        Empêche un scraper bug ou un site malveillant d'injecter une URL avec
+        un schéma dangereux qui finirait dans `<a href>` côté front (XSS).
+        """
         if v is None or v == "":
             return None
         v = v.strip()
-        if not (v.startswith("http://") or v.startswith("https://")):
-            # On garde la valeur mais on log un warning (via Pydantic warn pas
-            # accessible facilement → on laisse passer, certains scrapers
-            # renvoient des paths relatifs)
-            pass
+        if not v:
+            return None
+        lo = v.lower()
+        if not (lo.startswith("http://") or lo.startswith("https://")):
+            raise ValueError(
+                f"URL must use http:// or https:// scheme (got: {v[:50]!r})"
+            )
         return v
 
     @field_validator("date_published")

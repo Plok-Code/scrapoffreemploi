@@ -166,7 +166,7 @@
                 <td class="px-3 py-2">
                     <div class="flex items-center gap-1.5">
                         {% if o.url %}
-                            <a href="{{ o.url }}" target="_blank" rel="noopener"
+                            <a href="{{ o.url | safe_href }}" target="_blank" rel="noopener noreferrer"
                                class="text-xs text-blue-600 hover:underline">Voir ↗</a>
                         {% endif %}
                         {% if o.status == "Pas intéressé" %}
