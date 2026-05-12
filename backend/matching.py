@@ -174,9 +174,54 @@ def list_score_files() -> list[Path]:
     return sorted(BATCHES_DIR.glob("*_scores.json"))
 
 
+def is_batch_applied(batch_path: Path) -> bool:
+    """Détermine si un batch `*_to_score.json` a déjà été appliqué.
+
+    Critère : toutes les offres référencées dans le batch (par `id`) ont
+    `match_score IS NOT NULL` en DB ET `scored_at >` la mtime du batch.
+
+    Permet à `cli list-batches` de masquer les batches déjà traités plutôt
+    que les afficher comme "à scorer" alors qu'il n'y a plus rien à faire.
+    """
+    if not batch_path.exists():
+        return False
+    try:
+        raw = json.loads(batch_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    offers = raw.get("offers") or []
+    offer_ids = [o.get("id") for o in offers if isinstance(o.get("id"), int)]
+    if not offer_ids:
+        return True  # batch vide = rien à scorer
+    placeholders = ",".join("?" * len(offer_ids))
+    sql = (
+        f"SELECT COUNT(*) AS unscored FROM offers "  # nosec B608 : placeholders, pas user input
+        f"WHERE id IN ({placeholders}) AND match_score IS NULL"
+    )
+    with db() as conn:
+        row = conn.execute(sql, offer_ids).fetchone()
+    return row["unscored"] == 0
+
+
+def list_pending_batches() -> list[Path]:
+    """Liste les `*_to_score.json` dont au moins une offre n'a pas encore de score."""
+    return [b for b in list_batches() if not is_batch_applied(b)]
+
+
+def list_applied_batches() -> list[Path]:
+    """Liste les `*_to_score.json` dont toutes les offres ont un score (= traités)."""
+    return [b for b in list_batches() if is_batch_applied(b)]
+
+
 def latest_batch() -> Optional[Path]:
     batches = list_batches()
     return batches[-1] if batches else None
+
+
+def latest_pending_batch() -> Optional[Path]:
+    """Dernier batch non-appliqué (le plus utile pour le workflow scoring)."""
+    pending = list_pending_batches()
+    return pending[-1] if pending else None
 
 
 def latest_scores_file() -> Optional[Path]:

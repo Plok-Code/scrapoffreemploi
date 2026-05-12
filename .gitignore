@@ -23,6 +23,9 @@ Thumbs.db
 .claude/.tmp/
 .claude/audit.log
 .claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/tmp/
+.claude/spawn-tasks/
 
 # MCP credentials (si .mcp.json un jour avec secrets)
 .mcp.local.json

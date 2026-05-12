@@ -120,16 +120,30 @@ def cmd_check_alive(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_list_batches(_args: argparse.Namespace) -> int:
-    batches = matching.list_batches()
+def cmd_list_batches(args: argparse.Namespace) -> int:
+    pending = matching.list_pending_batches()
+    applied = matching.list_applied_batches()
     score_files = matching.list_score_files()
-    print("Batches à scorer :")
-    for p in batches:
+
+    print("Batches À SCORER (au moins 1 offre sans match_score) :")
+    for p in pending:
         print(f"  {p}")
-    if not batches:
-        print("  (aucun)")
+    if not pending:
+        print("  (aucun — tous les batches existants ont été scorés)")
     print()
-    print("Fichiers de scores reçus :")
+
+    if args.show_applied:
+        print("Batches DÉJÀ APPLIQUÉS (toutes les offres ont un score en DB) :")
+        for p in applied:
+            print(f"  {p}")
+        if not applied:
+            print("  (aucun)")
+        print()
+    elif applied:
+        print(f"({len(applied)} batch(es) déjà appliqué(s) — relancer avec --show-applied pour les voir)")
+        print()
+
+    print("Fichiers de SCORES reçus :")
     for p in score_files:
         print(f"  {p}")
     if not score_files:
@@ -204,7 +218,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_alive.set_defaults(func=cmd_check_alive)
 
     # list-batches
-    p_list = sub.add_parser("list-batches", help="Liste les batches générés et les scores reçus.")
+    p_list = sub.add_parser(
+        "list-batches",
+        help="Liste les batches non-appliqués (et les scores reçus).",
+    )
+    p_list.add_argument(
+        "--show-applied",
+        action="store_true",
+        help="Affiche aussi les batches déjà appliqués (masqués par défaut).",
+    )
     p_list.set_defaults(func=cmd_list_batches)
 
     return parser
