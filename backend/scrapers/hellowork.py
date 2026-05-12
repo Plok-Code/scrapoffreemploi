@@ -99,16 +99,22 @@ class HelloWorkScraper(Scraper):
         return results
 
     def _parse_search_page(self, html: str) -> list[RawOffer]:
+        from backend._logging import logger as _log
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select("[data-cy=serpCard]")
         offers: list[RawOffer] = []
-        for card in cards:
+        for idx, card in enumerate(cards):
             try:
                 offer = self._parse_card(card)
                 if offer:
                     offers.append(offer)
-            except Exception:  # noqa: BLE001
-                # En cas de structure inattendue, skip plutôt que crash
+            except Exception as e:  # noqa: BLE001
+                # Structure inattendue dans une card : skip + log debug
+                # (debug, pas warning, car peut arriver souvent sur structure HelloWork mouvante)
+                _log.debug(
+                    "HelloWork _parse_card KO card_idx={i} err={err}",
+                    i=idx, err=str(e),
+                )
                 continue
         return offers
 

@@ -27,7 +27,8 @@ from backend.scrapers.base import RawOffer, Scraper
 
 # --- Config ---
 
-TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token"
+# Endpoint OAuth (pas un secret — c'est l'URL publique documentée de France Travail)
+TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token"  # nosec B105
 SEARCH_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
 DETAIL_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/{id}"
 SCOPE = "api_offresdemploiv2 o2dsoffre"
@@ -39,8 +40,9 @@ NATURE_PROFESSIONNALISATION = "E2"
 # Politesse : on reste à 8 req/s alors que le plafond est 10/s (marge de sécurité)
 _MIN_INTERVAL_S = 0.125
 
-# Cache token en mémoire (par process)
-_TOKEN_CACHE: dict[str, Any] = {"token": None, "expires_at": 0.0}
+# Cache token en mémoire (par process). Le contenu réel est rempli au runtime
+# via _get_token() — jamais hardcodé.
+_TOKEN_CACHE: dict[str, Any] = {"token": None, "expires_at": 0.0}  # nosec B105
 
 
 def _load_env() -> tuple[str, str]:

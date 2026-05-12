@@ -364,16 +364,39 @@ def record_scrape_run(
 
 
 def update_offer(offer_id: int, fields: dict[str, Any]) -> bool:
-    """Update partiel d'une offre. Ne touche que les champs whitelist."""
+    """Update partiel d'une offre. Ne touche que les champs whitelist + valide enums.
+
+    Lève `ValueError` si un champ enum (status/priority/remote) reçoit une valeur
+    hors `VALID_STATUSES / VALID_PRIORITIES / VALID_REMOTE`. FastAPI convertit
+    le ValueError en 422 automatiquement via les routes.
+    """
+    from backend.models import VALID_PRIORITIES, VALID_REMOTE, VALID_STATUSES
+
     clean = {k: (v if v not in ("", None) else None) for k, v in fields.items() if k in ALLOWED_UPDATE_FIELDS}
     if not clean:
         return False
-    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
-    sql = f"UPDATE offers SET {set_clause} WHERE id = :id"
+    # Validation enum côté queries (défense en profondeur — même si l'UI valide,
+    # un POST/PATCH direct ne doit pas pouvoir bypasser)
+    _validate_enum("status", clean.get("status"), VALID_STATUSES)
+    _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
+    _validate_enum("remote", clean.get("remote"), VALID_REMOTE)
+
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)  # nosec B608 : clean keys whitelistés via ALLOWED_UPDATE_FIELDS
+    sql = f"UPDATE offers SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = offer_id
     with db() as conn:
         cur = conn.execute(sql, clean)
         return cur.rowcount > 0
+
+
+def _validate_enum(field_name: str, value, allowed: tuple) -> None:
+    """Lève ValueError si `value` n'est pas None/'' et pas dans `allowed`."""
+    if value is None or value == "":
+        return
+    if value not in allowed:
+        raise ValueError(
+            f"{field_name}={value!r} invalide. Valeurs autorisées : {allowed}"
+        )
 
 
 # ---------- Target companies (phase 2 — candidature spontanée) ----------
@@ -624,6 +647,9 @@ def get_target_company(company_id: int) -> Optional[dict]:
 
 
 def update_target_company(company_id: int, fields: dict[str, Any]) -> bool:
+    """Update partiel d'une entreprise cible. Whitelist + validation enums."""
+    from backend.models import VALID_COMPANY_STATUSES, VALID_PRIORITIES
+
     clean = {
         k: (v if v not in ("", None) else None)
         for k, v in fields.items()
@@ -631,8 +657,11 @@ def update_target_company(company_id: int, fields: dict[str, Any]) -> bool:
     }
     if not clean:
         return False
-    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
-    sql = f"UPDATE target_companies SET {set_clause} WHERE id = :id"
+    _validate_enum("status", clean.get("status"), VALID_COMPANY_STATUSES)
+    _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
+
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)  # nosec B608 : keys whitelistés
+    sql = f"UPDATE target_companies SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = company_id
     with db() as conn:
         cur = conn.execute(sql, clean)

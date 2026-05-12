@@ -131,8 +131,10 @@ def expand_cities() -> dict:
         # En pratique, l'ancien index est UNIQUE(LOWER(name)) — on doit le drop.
         try:
             conn.execute("DROP INDEX IF EXISTS idx_target_companies_name")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            # OK si l'index n'existe pas déjà (migration déjà appliquée)
+            from backend._logging import logger
+            logger.debug("DROP INDEX idx_target_companies_name skipped : {err}", err=str(e))
 
         rows = conn.execute(
             "SELECT id, name FROM target_companies WHERE city IS NULL OR city = '' ORDER BY id"

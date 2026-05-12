@@ -296,7 +296,9 @@ def _fetch_phenom_jobs(url: str, company_name: str, client: httpx.Client) -> lis
             if r.status_code == 200 and r.text.strip().startswith(("{", "[")):
                 data = r.json()
                 break
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # Endpoint Phenom non disponible / mauvais format → on essaie le suivant
+            logger.debug("Phenom endpoint KO ep={ep} err={err}", ep=ep, err=str(e))
             continue
     if not data:
         return []

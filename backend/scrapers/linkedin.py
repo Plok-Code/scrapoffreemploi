@@ -17,6 +17,7 @@ import re
 
 from bs4 import BeautifulSoup
 
+from backend._logging import logger
 from backend.scrapers._http import get_with_retry, http_client
 from backend.scrapers.base import RawOffer, Scraper
 
@@ -63,9 +64,9 @@ class LinkedInScraper(Scraper):
                 desc = self._fetch_detail_playwright(url, persistent_browser)
                 if desc:
                     return desc
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             # Si Playwright n'est pas installé ou plante, on passe au fallback
-            pass
+            logger.debug("LinkedIn Playwright KO, fallback httpx : {err}", err=str(e))
 
         # 2) Fallback httpx (guest, marche pour les offres actives)
         with http_client() as client:
@@ -87,8 +88,12 @@ class LinkedInScraper(Scraper):
                         timeout=12000,
                         state="attached",
                     )
-                except Exception:  # noqa: BLE001
-                    pass  # on tente quand même l'extract sur le HTML actuel
+                except Exception as e:  # noqa: BLE001
+                    # Timeout du selector : on tente quand même l'extract sur le DOM actuel
+                    logger.debug(
+                        "LinkedIn wait_for_selector timeout url={u} err={err}",
+                        u=url, err=str(e),
+                    )
                 html = page.content()
                 return _extract_from_html(html)
             finally:

@@ -85,7 +85,8 @@ class RateLimiter:
     def acquire(self) -> None:
         """Bloque jusqu'à ce que le prochain délai soit OK."""
         now = time.time()
-        target_delay = random.uniform(self.min_delay, self.max_delay)
+        # random non-crypto OK : juste du jitter anti-fingerprint pour pas être bot-régulier
+        target_delay = random.uniform(self.min_delay, self.max_delay)  # nosec B311
         elapsed = now - self._last_call
         if elapsed < target_delay:
             time.sleep(target_delay - elapsed)
@@ -102,7 +103,8 @@ def polite_sleep(seconds: float = 1.5) -> None:
     Conservé pour compat avec le code existant.
     """
     # Ajoute un peu de jitter même ici (±20%) pour pas être trop régulier
-    actual = seconds * random.uniform(0.8, 1.2)
+    # random non-crypto OK (anti-fingerprint, pas de secret généré)
+    actual = seconds * random.uniform(0.8, 1.2)  # nosec B311
     time.sleep(actual)
 
 

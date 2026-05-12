@@ -1,6 +1,7 @@
 """App FastAPI : routes web + Jinja templates."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
@@ -24,7 +25,31 @@ init_logging(level="INFO")
 
 BASE_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="Scrap'Offre Emploi", docs_url="/api/docs")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Lifespan handler (remplace @app.on_event 'startup' déprécié).
+
+    Au démarrage :
+    1. init_schema() : crée les tables + migre les colonnes (idempotent)
+    2. Reset _SCRAPE_STATE.running : si le serveur précédent a été tué pendant
+       un scrape, l'état RAM en arrière-plan est mort avec lui — on évite le
+       'running=True' fantôme qui bloque tout nouveau scrape.
+    Shutdown : rien à nettoyer (uvicorn ferme les sockets, sqlite ferme via
+    context manager `db()` de chaque request).
+    """
+    init_schema()
+    if _SCRAPE_STATE.get("running"):
+        logger.warning(
+            "Reset _SCRAPE_STATE au boot : un scrape était marqué 'running' "
+            "(probablement tué avec le serveur précédent)"
+        )
+    _SCRAPE_STATE["running"] = False
+    _SCRAPE_STATE["step"] = "idle"
+    yield
+    # rien à faire au shutdown
+
+
+app = FastAPI(title="Scrap'Offre Emploi", docs_url="/api/docs", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
@@ -109,25 +134,6 @@ class CSRFOriginMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CSRFOriginMiddleware)
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    """S'assure que le schéma existe + reset l'état scrape (bug #3 audit).
-
-    Sans reset, si le serveur est tué pendant un scrape, `_SCRAPE_STATE['running']`
-    reste à True à tout jamais → impossible de relancer un scrape sans hack manuel.
-    Au boot, on force `running=False` pour signaler "le précédent scrape (s'il y
-    en avait un) est mort avec le serveur".
-    """
-    init_schema()
-    if _SCRAPE_STATE.get("running"):
-        logger.warning(
-            "Reset _SCRAPE_STATE au boot : un scrape était marqué 'running' "
-            "(probablement tué avec le serveur précédent)"
-        )
-    _SCRAPE_STATE["running"] = False
-    _SCRAPE_STATE["step"] = "idle"
-
-
 # ---------- Pages ----------
 
 @app.get("/", response_class=HTMLResponse)
@@ -153,9 +159,9 @@ def page_offers(
     stats = queries.get_stats()
     sources = queries.list_sources()
     return templates.TemplateResponse(
+        request,
         "offers.html",
         {
-            "request": request,
             "offers": offers,
             "stats": stats,
             "sources": sources,
@@ -180,9 +186,9 @@ def page_offer_detail(request: Request, offer_id: int):
     if not offer:
         raise HTTPException(404, "Offre introuvable")
     return templates.TemplateResponse(
+        request,
         "offer_detail.html",
         {
-            "request": request,
             "offer": offer,
             "statuses": VALID_STATUSES,
             "priorities": VALID_PRIORITIES,
@@ -204,19 +210,22 @@ def update_offer_route(
     priority: str = Form(""),
     remote: str = Form(""),
 ):
-    ok = queries.update_offer(
-        offer_id,
-        {
-            "status": status,
-            "application_method": application_method,
-            "date_applied": date_applied,
-            "date_followup": date_followup,
-            "date_interview": date_interview,
-            "notes": notes,
-            "priority": priority,
-            "remote": remote,
-        },
-    )
+    try:
+        ok = queries.update_offer(
+            offer_id,
+            {
+                "status": status,
+                "application_method": application_method,
+                "date_applied": date_applied,
+                "date_followup": date_followup,
+                "date_interview": date_interview,
+                "notes": notes,
+                "priority": priority,
+                "remote": remote,
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     if not ok:
         raise HTTPException(404, "Offre introuvable ou aucun champ à mettre à jour")
     return RedirectResponse(f"/offers/{offer_id}", status_code=303)
@@ -244,9 +253,9 @@ def page_companies(
     target_cities = queries.count_companies_per_target_city()
     other_haute_count = queries.count_other_haute()
     return templates.TemplateResponse(
+        request,
         "companies.html",
         {
-            "request": request,
             "companies": companies,
             "stats": stats,
             "priorities": priorities,
@@ -273,9 +282,9 @@ def page_company_detail(request: Request, company_id: int):
     if not company:
         raise HTTPException(404, "Entreprise introuvable")
     return templates.TemplateResponse(
+        request,
         "company_detail.html",
         {
-            "request": request,
             "company": company,
             "statuses": VALID_COMPANY_STATUSES,
             "priorities": VALID_PRIORITIES,
@@ -294,17 +303,20 @@ def update_company_route(
     feedback: str = Form(""),
     priority: str = Form(""),
 ):
-    ok = queries.update_target_company(
-        company_id,
-        {
-            "status": status,
-            "date_contacted": date_contacted,
-            "date_followup": date_followup,
-            "notes": notes,
-            "feedback": feedback,
-            "priority": priority,
-        },
-    )
+    try:
+        ok = queries.update_target_company(
+            company_id,
+            {
+                "status": status,
+                "date_contacted": date_contacted,
+                "date_followup": date_followup,
+                "notes": notes,
+                "feedback": feedback,
+                "priority": priority,
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     if not ok:
         raise HTTPException(404, "Entreprise introuvable ou aucun champ à mettre à jour")
     return RedirectResponse(f"/companies/{company_id}", status_code=303)
@@ -319,7 +331,10 @@ def api_stats():
 
 @app.patch("/api/offers/{offer_id}")
 def api_update_offer(offer_id: int, payload: dict):
-    ok = queries.update_offer(offer_id, payload)
+    try:
+        ok = queries.update_offer(offer_id, payload)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     if not ok:
         raise HTTPException(404, "Offre introuvable")
     return {"ok": True}
@@ -331,7 +346,10 @@ def api_set_offer_status(offer_id: int, status: str = Form("")):
 
     `status=""` (vide) remet l'offre en `status=NULL` (= À postuler).
     """
-    ok = queries.update_offer(offer_id, {"status": status})
+    try:
+        ok = queries.update_offer(offer_id, {"status": status})
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     if not ok:
         raise HTTPException(404, "Offre introuvable")
     return {"ok": True, "offer_id": offer_id, "status": status or None}

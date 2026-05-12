@@ -106,3 +106,64 @@ class TestCSRFOriginMiddleware:
         """curl / Swagger UI / scripts CLI n'envoient pas Origin/Referer → on accepte."""
         r = client.post("/api/scrape/reset")
         assert r.status_code == 200
+
+
+class TestEnumValidation:
+    """Audit user finding #2 : les routes POST/PATCH acceptaient des valeurs hors enum."""
+
+    @pytest.fixture
+    def client(self, monkeypatch, tmp_path):
+        db_file = tmp_path / "test.db"
+        monkeypatch.setattr("backend.db.DB_PATH", db_file)
+        from backend.db import init_schema
+        init_schema()
+        # Insère 1 offre + 1 entreprise pour pouvoir les update
+        from backend.db import db as _db
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO offers (title, company, city, dedup_key) "
+                "VALUES ('Test', 'Acme', 'Paris', 'test|acme|paris')"
+            )
+            conn.execute(
+                "INSERT INTO target_companies (name, city) VALUES ('Acme', 'Paris')"
+            )
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        return TestClient(app)
+
+    def test_patch_offer_invalid_remote_rejected(self, client):
+        """PATCH /api/offers/1 avec remote='INVALID_REMOTE' → 422 (audit user)."""
+        r = client.patch("/api/offers/1", json={"remote": "INVALID_REMOTE"})
+        assert r.status_code == 422
+        assert "remote" in r.text.lower()
+
+    def test_patch_offer_invalid_status_rejected(self, client):
+        r = client.patch("/api/offers/1", json={"status": "P0WNED"})
+        assert r.status_code == 422
+
+    def test_patch_offer_invalid_priority_rejected(self, client):
+        r = client.patch("/api/offers/1", json={"priority": "ULTRA"})
+        assert r.status_code == 422
+
+    def test_patch_offer_valid_remote_passes(self, client):
+        r = client.patch("/api/offers/1", json={"remote": "Hybride"})
+        assert r.status_code == 200
+
+    def test_post_company_invalid_priority_rejected(self, client):
+        """POST /companies/1 avec priority='P0WNED' → 422 (audit user)."""
+        r = client.post("/companies/1", data={"priority": "P0WNED"}, follow_redirects=False)
+        assert r.status_code == 422
+
+    def test_post_company_invalid_status_rejected(self, client):
+        r = client.post("/companies/1", data={"status": "HACKED"}, follow_redirects=False)
+        assert r.status_code == 422
+
+    def test_post_company_valid_priority_passes(self, client):
+        r = client.post("/companies/1", data={"priority": "Haute"}, follow_redirects=False)
+        # 303 redirect car succès
+        assert r.status_code == 303
+
+    def test_post_offer_status_invalid_rejected(self, client):
+        """POST /api/offers/1/status (HTMX toggle) doit aussi valider."""
+        r = client.post("/api/offers/1/status", data={"status": "INVALID"})
+        assert r.status_code == 422

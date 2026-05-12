@@ -46,7 +46,11 @@
                                 Avant le scrape : nettoie les URLs mortes (sans statut → supprimées, avec statut → archivées).
                                 Après : scoring auto (heuristique) sur les nouvelles offres.
                             </p>
-                            <form hx-post="/api/scrape" hx-trigger="submit" hx-target="#scrape-status" hx-swap="innerHTML"
+                            {# hx-swap="none" : la réponse JSON `{"ok": true, ...}` n'est PAS
+                                injectée dans le DOM (sinon brief affichage JSON brut avant
+                                que le handler JS reformatte). Le statut sera mis à jour par
+                                le polling 3s du div #scrape-status ci-dessous. #}
+                            <form hx-post="/api/scrape" hx-trigger="submit" hx-swap="none"
                                   class="space-y-2">
                                 <input type="hidden" name="source" value="all" />
                                 <div class="flex gap-2 items-end">
@@ -74,7 +78,7 @@
                         <!-- Mode "Une seule source" -->
                         <details class="text-xs">
                             <summary class="cursor-pointer text-slate-600 hover:text-slate-900">Scraper une seule source ↓</summary>
-                            <form hx-post="/api/scrape" hx-trigger="submit" hx-target="#scrape-status" hx-swap="innerHTML"
+                            <form hx-post="/api/scrape" hx-trigger="submit" hx-swap="none"
                                   class="space-y-2 mt-2 pl-2">
                                 <div>
                                     <label class="block text-xs text-slate-500 mb-0.5">Source</label>
