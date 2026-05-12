@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Offres — Scrap'Offre Emploi{% endblock %}
+
+{% macro score_badge(score) -%}
+    {% if score is none %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-200 text-slate-600">—</span>
+    {% elif score >= 80 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800 font-medium">{{ score }}</span>
+    {% elif score >= 60 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800 font-medium">{{ score }}</span>
+    {% elif score >= 40 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-orange-100 text-orange-800 font-medium">{{ score }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">{{ score }}</span>
+    {% endif %}
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+    {% if not status %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">A postuler</span>
+    {% elif status == "Postulé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800">{{ status }}</span>
+    {% elif status == "Entretien" or status == "Test technique" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-800">{{ status }}</span>
+    {% elif status == "Accepté" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800">{{ status }}</span>
+    {% elif status == "Refusé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800">{{ status }}</span>
+    {% elif status == "Relancé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800">{{ status }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ status }}</span>
+    {% endif %}
+{%- endmacro %}
+
+{% block content %}
+<!-- Stats -->
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Total</div>
+        <div class="text-2xl font-semibold">{{ stats.total }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">A postuler</div>
+        <div class="text-2xl font-semibold">{{ stats.to_apply }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Postulé</div>
+        <div class="text-2xl font-semibold text-blue-700">{{ stats.applied }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Entretien</div>
+        <div class="text-2xl font-semibold text-purple-700">{{ stats.interviews }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Refusé</div>
+        <div class="text-2xl font-semibold text-rose-700">{{ stats.refused }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Top fit (80+)</div>
+        <div class="text-2xl font-semibold text-emerald-700">{{ stats.top_fit }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Bon (60-79)</div>
+        <div class="text-2xl font-semibold text-yellow-700">{{ stats.bon_fit }}</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Pas scoré</div>
+        <div class="text-2xl font-semibold text-slate-500">{{ stats.unscored }}</div>
+    </div>
+</div>
+
+<!-- Filtres -->
+<form method="get" action="/" class="bg-white border border-slate-200 rounded p-3 mb-4 flex flex-wrap gap-3 items-end">
+    <div class="flex-1 min-w-48">
+        <label class="block text-xs text-slate-500 mb-1">Recherche (titre, entreprise, ville)</label>
+        <input type="text" name="search" value="{{ filters.search }}"
+               class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm"
+               placeholder="Ex: ML, Paris, Renault..." />
+    </div>
+    <div>
+        <label class="block text-xs text-slate-500 mb-1">Statut</label>
+        <select name="status" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
+            <option value="">Tous</option>
+            <option value="_NONE_" {% if filters.status == "_NONE_" %}selected{% endif %}>A postuler (vide)</option>
+            {% for s in statuses %}
+                <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
+        <label class="block text-xs text-slate-500 mb-1">Source</label>
+        <select name="source" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
+            <option value="">Toutes</option>
+            {% for s in sources %}
+                <option value="{{ s }}" {% if filters.source == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
+        <label class="block text-xs text-slate-500 mb-1">Score min</label>
+        <input type="number" name="min_score" value="{{ filters.min_score or '' }}" min="0" max="100" step="5"
+               class="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
+    </div>
+    <div>
+        <label class="block text-xs text-slate-500 mb-1">Trier par</label>
+        <select name="sort" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
+            <option value="score_desc" {% if filters.sort == "score_desc" %}selected{% endif %}>Score (haut → bas)</option>
+            <option value="score_asc" {% if filters.sort == "score_asc" %}selected{% endif %}>Score (bas → haut)</option>
+            <option value="date_desc" {% if filters.sort == "date_desc" %}selected{% endif %}>Date publication (récent)</option>
+            <option value="date_asc" {% if filters.sort == "date_asc" %}selected{% endif %}>Date publication (ancien)</option>
+            <option value="company" {% if filters.sort == "company" %}selected{% endif %}>Entreprise</option>
+            <option value="title" {% if filters.sort == "title" %}selected{% endif %}>Titre</option>
+        </select>
+    </div>
+    <button type="submit" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-700 text-white rounded text-sm font-medium">
+        Filtrer
+    </button>
+    <a href="/" class="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-700 rounded text-sm">
+        Reset
+    </a>
+</form>
+
+<!-- Tableau -->
+<div class="bg-white border border-slate-200 rounded overflow-hidden">
+    <div class="px-3 py-2 border-b border-slate-200 text-sm text-slate-600">
+        {{ offers|length }} offre{% if offers|length > 1 %}s{% endif %} affichée{% if offers|length > 1 %}s{% endif %}
+    </div>
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+            <tr>
+                <th class="text-left px-3 py-2 w-14">Score</th>
+                <th class="text-left px-3 py-2">Titre</th>
+                <th class="text-left px-3 py-2">Entreprise</th>
+                <th class="text-left px-3 py-2">Ville</th>
+                <th class="text-left px-3 py-2">Source</th>
+                <th class="text-left px-3 py-2">Date pub.</th>
+                <th class="text-left px-3 py-2">Statut</th>
+                <th class="text-left px-3 py-2 w-20">Action</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+            {% for o in offers %}
+            <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2">{{ score_badge(o.match_score) }}</td>
+                <td class="px-3 py-2">
+                    <a href="/offers/{{ o.id }}" class="text-slate-900 hover:underline font-medium">
+                        {{ o.title }}
+                    </a>
+                </td>
+                <td class="px-3 py-2 text-slate-700">{{ o.company or "—" }}</td>
+                <td class="px-3 py-2 text-slate-600 text-xs">
+                    {{ o.city or "" }}{% if o.department %} ({{ o.department }}){% endif %}
+                </td>
+                <td class="px-3 py-2 text-slate-600 text-xs">{{ o.source or "—" }}</td>
+                <td class="px-3 py-2 text-slate-500 text-xs">{{ o.date_published or "—" }}</td>
+                <td class="px-3 py-2">{{ status_badge(o.status) }}</td>
+                <td class="px-3 py-2">
+                    {% if o.url %}
+                        <a href="{{ o.url }}" target="_blank" rel="noopener"
+                           class="text-xs text-blue-600 hover:underline">Voir ↗</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="text-center py-8 text-slate-400">Aucune offre.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endblock %}

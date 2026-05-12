@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "defaultMode": "bypassPermissions",
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf .)",
+      "Bash(rm -rf D:)",
+      "Bash(rm -rf C:)",
+      "Bash(sudo rm:*)",
+      "Bash(sudo dd:*)",
+      "Bash(dd if=*)",
+      "Bash(mkfs:*)",
+      "Bash(:(){ :|:& };:)",
+      "Bash(chmod -R 777 /)",
+      "Bash(chown -R *)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)",
+      "PowerShell(Remove-Item -Recurse -Force *)",
+      "PowerShell(Remove-Item -Force -Recurse *)",
+      "PowerShell(Format-Volume*)",
+      "PowerShell(Stop-Computer*)",
+      "PowerShell(Restart-Computer*)",
+      "PowerShell(Clear-Disk*)",
+      "PowerShell(Initialize-Disk*)",
+      "PowerShell(Remove-Item C:*)",
+      "PowerShell(Remove-Item D:*)",
+      "PowerShell(rd /s /q *)",
+      "PowerShell(rmdir /s /q *)",
+      "Edit(data/source/candidatures_alternance_AI_Engineer.xlsx)",
+      "Edit(./data/source/candidatures_alternance_AI_Engineer.xlsx)",
+      "Write(data/source/candidatures_alternance_AI_Engineer.xlsx)",
+      "Write(./data/source/candidatures_alternance_AI_Engineer.xlsx)"
+    ]
+  }
+}

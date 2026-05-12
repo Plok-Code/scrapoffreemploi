@@ -1,0 +1,32 @@
+# Données vivantes
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Editeurs
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/settings.local.json
+.claude/sessions/
+.claude/cache/
+.claude/.tmp/
+.claude/audit.log
+
+# MCP credentials (si .mcp.json un jour avec secrets)
+.mcp.local.json
+.env
+.env.local
+
+# Legacy : ancien code + JSON scraps anciens (peut contenir des données de candidatures perso)
+legacy/

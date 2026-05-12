@@ -1,0 +1,281 @@
+"""Couche d'accès aux données : requêtes sur la table offers."""
+from __future__ import annotations
+
+import sqlite3
+from typing import Any, Optional
+
+from backend.db import db
+
+
+# ---------- Helpers ----------
+
+def _row_to_dict(row: sqlite3.Row | None) -> Optional[dict]:
+    return dict(row) if row is not None else None
+
+
+# ---------- Reads ----------
+
+def get_offer(offer_id: int) -> Optional[dict]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM offers WHERE id = ?", (offer_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def list_offers(
+    *,
+    search: str = "",
+    status: str = "",
+    source: str = "",
+    min_score: int | None = None,
+    only_to_apply: bool = False,
+    sort: str = "score_desc",
+    limit: int = 500,
+) -> list[dict]:
+    """Liste filtrée des offres. Filtres optionnels."""
+    where = []
+    params: list[Any] = []
+
+    if search:
+        where.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ? OR LOWER(city) LIKE ?)")
+        s = f"%{search.lower()}%"
+        params.extend([s, s, s])
+
+    if status:
+        if status == "_NONE_":
+            where.append("status IS NULL")
+        else:
+            where.append("status = ?")
+            params.append(status)
+
+    if source:
+        where.append("source = ?")
+        params.append(source)
+
+    if min_score is not None:
+        where.append("match_score >= ?")
+        params.append(min_score)
+
+    if only_to_apply:
+        where.append("status IS NULL")
+
+    sql = "SELECT * FROM offers"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sort_clauses = {
+        "score_desc": "match_score DESC NULLS LAST, date_published DESC",
+        "score_asc": "match_score ASC NULLS LAST",
+        "date_desc": "date_published DESC NULLS LAST",
+        "date_asc": "date_published ASC NULLS LAST",
+        "company": "LOWER(company) ASC NULLS LAST",
+        "title": "LOWER(title) ASC NULLS LAST",
+    }
+    sql += " ORDER BY " + sort_clauses.get(sort, sort_clauses["score_desc"])
+    sql += f" LIMIT {int(limit)}"
+
+    with db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_sources() -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT source FROM offers WHERE source IS NOT NULL AND source != '' ORDER BY source"
+        ).fetchall()
+    return [r["source"] for r in rows]
+
+
+def list_distinct_statuses() -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT status FROM offers WHERE status IS NOT NULL AND status != '' ORDER BY status"
+        ).fetchall()
+    return [r["status"] for r in rows]
+
+
+def get_stats() -> dict:
+    """KPIs pour la barre de stats en haut de page."""
+    with db() as conn:
+        cur = conn.cursor()
+        total = cur.execute("SELECT COUNT(*) FROM offers").fetchone()[0]
+        to_apply = cur.execute("SELECT COUNT(*) FROM offers WHERE status IS NULL").fetchone()[0]
+        applied = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Postulé'").fetchone()[0]
+        interviews = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Entretien'").fetchone()[0]
+        refused = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Refusé'").fetchone()[0]
+        top_fit = cur.execute("SELECT COUNT(*) FROM offers WHERE match_score >= 80").fetchone()[0]
+        bon_fit = cur.execute(
+            "SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80"
+        ).fetchone()[0]
+        unscored = cur.execute("SELECT COUNT(*) FROM offers WHERE match_score IS NULL").fetchone()[0]
+    return {
+        "total": total,
+        "to_apply": to_apply,
+        "applied": applied,
+        "interviews": interviews,
+        "refused": refused,
+        "top_fit": top_fit,
+        "bon_fit": bon_fit,
+        "unscored": unscored,
+    }
+
+
+# ---------- Writes ----------
+
+ALLOWED_UPDATE_FIELDS = {
+    "status", "application_method", "date_applied", "date_followup",
+    "date_interview", "notes", "priority", "remote",
+}
+
+
+def update_description(offer_id: int, description: str) -> bool:
+    """Met à jour uniquement le champ description d'une offre."""
+    with db() as conn:
+        cur = conn.execute(
+            "UPDATE offers SET description = :desc WHERE id = :id",
+            {"desc": description, "id": offer_id},
+        )
+        return cur.rowcount > 0
+
+
+def insert_offer(offer_data: dict) -> tuple[int | None, bool]:
+    """Insère une offre nouvelle. Dédup par URL puis par dedup_key.
+
+    Returns:
+        (offer_id, was_new) — was_new=False si doublon (offer_id du doublon retourné).
+    """
+    from backend.db import make_dedup_key
+
+    title = offer_data.get("title")
+    company = offer_data.get("company")
+    url = offer_data.get("url")
+    if not title:
+        raise ValueError("Offer must have a title")
+
+    dedup_key = make_dedup_key(title, company)
+
+    with db() as conn:
+        # 1) Vérif URL
+        if url:
+            existing = conn.execute(
+                "SELECT id FROM offers WHERE url = ?", (url,)
+            ).fetchone()
+            if existing:
+                return existing["id"], False
+        # 2) Vérif dedup_key
+        existing = conn.execute(
+            "SELECT id FROM offers WHERE dedup_key = ?", (dedup_key,)
+        ).fetchone()
+        if existing:
+            return existing["id"], False
+
+        # Insert
+        sql = """
+            INSERT INTO offers (
+                title, company, city, department, source, url, description,
+                date_published, remote, contract_type, salary, dedup_key, scraped_at
+            ) VALUES (
+                :title, :company, :city, :department, :source, :url, :description,
+                :date_published, :remote, :contract_type, :salary, :dedup_key,
+                CURRENT_TIMESTAMP
+            )
+        """
+        params = {
+            "title": title,
+            "company": company,
+            "city": offer_data.get("city"),
+            "department": offer_data.get("department"),
+            "source": offer_data.get("source"),
+            "url": url,
+            "description": offer_data.get("description"),
+            "date_published": offer_data.get("date_published"),
+            "remote": offer_data.get("remote"),
+            "contract_type": offer_data.get("contract_type"),
+            "salary": offer_data.get("salary"),
+            "dedup_key": dedup_key,
+        }
+        cur = conn.execute(sql, params)
+        return cur.lastrowid, True
+
+
+def record_scrape_run(
+    *,
+    sources: str,
+    total_fetched: int,
+    total_new: int,
+    total_duplicates: int,
+    batch_file: str | None = None,
+    error: str | None = None,
+) -> int:
+    """Enregistre une exécution de scrape dans scrape_runs."""
+    with db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO scrape_runs (
+                sources, total_fetched, total_new, total_duplicates,
+                batch_file, error, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (sources, total_fetched, total_new, total_duplicates, batch_file, error),
+        )
+        return cur.lastrowid
+
+
+def update_offer(offer_id: int, fields: dict[str, Any]) -> bool:
+    """Update partiel d'une offre. Ne touche que les champs whitelist."""
+    clean = {k: (v if v not in ("", None) else None) for k, v in fields.items() if k in ALLOWED_UPDATE_FIELDS}
+    if not clean:
+        return False
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
+    sql = f"UPDATE offers SET {set_clause} WHERE id = :id"
+    clean["id"] = offer_id
+    with db() as conn:
+        cur = conn.execute(sql, clean)
+        return cur.rowcount > 0
+
+
+def apply_llm_scores(scores: list[dict]) -> int:
+    """Applique les scores LLM (output du chat) sur les offres existantes.
+
+    scores : liste de dicts avec offer_id, score_pipeline..., match_reasoning
+    Retourne le nombre d'offres mises à jour.
+    """
+    from backend.models import label_for_score
+
+    updated = 0
+    sql = """
+        UPDATE offers SET
+            score_pipeline = :score_pipeline,
+            score_exploration = :score_exploration,
+            score_modelisation = :score_modelisation,
+            score_deploiement = :score_deploiement,
+            score_cadrage = :score_cadrage,
+            match_score = :match_score,
+            match_label = :match_label,
+            match_reasoning = :match_reasoning,
+            scored_at = CURRENT_TIMESTAMP
+        WHERE id = :offer_id
+    """
+    with db() as conn:
+        for s in scores:
+            total = (
+                s.get("score_pipeline", 0)
+                + s.get("score_exploration", 0)
+                + s.get("score_modelisation", 0)
+                + s.get("score_deploiement", 0)
+                + s.get("score_cadrage", 0)
+            )
+            params = {
+                "offer_id": s["offer_id"],
+                "score_pipeline": s.get("score_pipeline"),
+                "score_exploration": s.get("score_exploration"),
+                "score_modelisation": s.get("score_modelisation"),
+                "score_deploiement": s.get("score_deploiement"),
+                "score_cadrage": s.get("score_cadrage"),
+                "match_score": total,
+                "match_label": label_for_score(total),
+                "match_reasoning": s.get("match_reasoning", ""),
+            }
+            cur = conn.execute(sql, params)
+            updated += cur.rowcount
+    return updated

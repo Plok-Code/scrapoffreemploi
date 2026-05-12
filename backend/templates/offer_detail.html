@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}{{ offer.title }} — Scrap'Offre Emploi{% endblock %}
+
+{% macro score_pill(score, max) %}
+    {% set pct = (score / max * 100) if score and max else 0 %}
+    <div class="flex items-center gap-2">
+        <div class="flex-1 h-2 bg-slate-200 rounded overflow-hidden">
+            <div class="h-full {% if pct >= 80 %}bg-emerald-500{% elif pct >= 60 %}bg-yellow-500{% elif pct >= 40 %}bg-orange-500{% else %}bg-slate-400{% endif %}"
+                 style="width: {{ pct }}%"></div>
+        </div>
+        <div class="text-sm font-medium w-12 text-right">{{ score or 0 }}/{{ max }}</div>
+    </div>
+{% endmacro %}
+
+{% block content %}
+<a href="/" class="inline-block mb-4 text-sm text-slate-600 hover:underline">← Retour à la liste</a>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Colonne principale : infos offre -->
+    <div class="lg:col-span-2 space-y-4">
+        <div class="bg-white border border-slate-200 rounded p-5">
+            <h1 class="text-2xl font-semibold mb-2">{{ offer.title }}</h1>
+            <div class="text-slate-600 mb-4">
+                <span class="font-medium">{{ offer.company or "—" }}</span>
+                {% if offer.city %} • {{ offer.city }}{% endif %}
+                {% if offer.department %} ({{ offer.department }}){% endif %}
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs mb-4">
+                {% if offer.source %}
+                    <span class="px-2 py-1 bg-slate-100 rounded">Source : {{ offer.source }}</span>
+                {% endif %}
+                {% if offer.contract_type %}
+                    <span class="px-2 py-1 bg-slate-100 rounded">{{ offer.contract_type }}</span>
+                {% endif %}
+                {% if offer.remote %}
+                    <span class="px-2 py-1 bg-slate-100 rounded">Remote : {{ offer.remote }}</span>
+                {% endif %}
+                {% if offer.date_published %}
+                    <span class="px-2 py-1 bg-slate-100 rounded">Publié : {{ offer.date_published }}</span>
+                {% endif %}
+                {% if offer.salary %}
+                    <span class="px-2 py-1 bg-slate-100 rounded">Salaire : {{ offer.salary }}</span>
+                {% endif %}
+            </div>
+            {% if offer.url %}
+                <a href="{{ offer.url }}" target="_blank" rel="noopener"
+                   class="inline-block px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">
+                    Voir l'offre originale ↗
+                </a>
+            {% endif %}
+        </div>
+
+        <!-- Description -->
+        {% if offer.description %}
+        <div class="bg-white border border-slate-200 rounded p-5">
+            <h2 class="font-medium mb-3 text-slate-700">Description</h2>
+            <div class="text-sm text-slate-700 whitespace-pre-wrap">{{ offer.description }}</div>
+        </div>
+        {% endif %}
+
+        <!-- Scoring breakdown -->
+        <div class="bg-white border border-slate-200 rounded p-5">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="font-medium text-slate-700">Score de matching</h2>
+                <div class="text-2xl font-semibold">
+                    {{ offer.match_score or 0 }}<span class="text-slate-400 text-base">/100</span>
+                    {% if offer.match_label %}
+                        <span class="ml-2 text-xs font-normal px-2 py-1 rounded
+                            {% if offer.match_label == 'Top' %}bg-emerald-100 text-emerald-800
+                            {% elif offer.match_label == 'Bon' %}bg-yellow-100 text-yellow-800
+                            {% elif offer.match_label == 'Moyen' %}bg-orange-100 text-orange-800
+                            {% else %}bg-slate-100 text-slate-600{% endif %}">
+                            {{ offer.match_label }}
+                        </span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="space-y-2 text-sm">
+                <div>
+                    <div class="text-slate-600 mb-1">Pipeline / ingestion de données</div>
+                    {{ score_pill(offer.score_pipeline, 20) }}
+                </div>
+                <div>
+                    <div class="text-slate-600 mb-1">Exploration / analyse de données</div>
+                    {{ score_pill(offer.score_exploration, 20) }}
+                </div>
+                <div>
+                    <div class="text-slate-600 mb-1">Modélisation IA</div>
+                    {{ score_pill(offer.score_modelisation, 20) }}
+                </div>
+                <div>
+                    <div class="text-slate-600 mb-1">Déploiement / MLOps</div>
+                    {{ score_pill(offer.score_deploiement, 20) }}
+                </div>
+                <div>
+                    <div class="text-slate-600 mb-1">Cadrage / qualité / indus</div>
+                    {{ score_pill(offer.score_cadrage, 20) }}
+                </div>
+            </div>
+            {% if offer.match_reasoning %}
+            <div class="mt-4 pt-4 border-t border-slate-100">
+                <div class="text-xs text-slate-500 uppercase tracking-wide mb-1">Justification</div>
+                <p class="text-sm text-slate-700">{{ offer.match_reasoning }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Colonne droite : formulaire de tracking -->
+    <div class="lg:col-span-1">
+        <form method="post" action="/offers/{{ offer.id }}" class="bg-white border border-slate-200 rounded p-5 space-y-4 sticky top-20">
+            <h2 class="font-medium text-slate-700 mb-2">Mon suivi</h2>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Statut</label>
+                <select name="status" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                    <option value="">(vide = à postuler)</option>
+                    {% for s in statuses %}
+                        <option value="{{ s }}" {% if offer.status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Comment postuler</label>
+                <input type="text" name="application_method" value="{{ offer.application_method or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm"
+                       placeholder="Portail, email RH, etc." />
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Date candidature</label>
+                <input type="date" name="date_applied" value="{{ offer.date_applied or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Date relance prévue</label>
+                <input type="date" name="date_followup" value="{{ offer.date_followup or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Date entretien</label>
+                <input type="date" name="date_interview" value="{{ offer.date_interview or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Priorité</label>
+                <select name="priority" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                    <option value="">—</option>
+                    {% for p in priorities %}
+                        <option value="{{ p }}" {% if offer.priority == p %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Remote</label>
+                <select name="remote" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                    <option value="">—</option>
+                    {% for r in remotes %}
+                        <option value="{{ r }}" {% if offer.remote == r %}selected{% endif %}>{{ r }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Notes</label>
+                <textarea name="notes" rows="4"
+                          class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">{{ offer.notes or '' }}</textarea>
+            </div>
+
+            <button type="submit"
+                    class="w-full px-3 py-2 bg-slate-900 hover:bg-slate-700 text-white rounded text-sm font-medium">
+                Enregistrer
+            </button>
+
+            {% if offer.updated_at %}
+            <div class="text-xs text-slate-400 text-center">
+                Dernière maj : {{ offer.updated_at }}
+            </div>
+            {% endif %}
+        </form>
+    </div>
+</div>
+{% endblock %}
