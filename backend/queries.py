@@ -161,6 +161,14 @@ def update_description(offer_id: int, description: str) -> bool:
         return cur.rowcount > 0
 
 
+def delete_offer(offer_id: int) -> bool:
+    """Supprime définitivement une offre. Réservé au cleanup des URLs mortes
+    sans statut user (l'historique applicatif est préservé)."""
+    with db() as conn:
+        cur = conn.execute("DELETE FROM offers WHERE id = :id", {"id": offer_id})
+        return cur.rowcount > 0
+
+
 def set_alive_state(offer_id: int, *, is_active: bool) -> bool:
     """Marque l'offre active (1) ou archivée (0) et stamp last_checked_at."""
     with db() as conn:
@@ -283,10 +291,15 @@ def list_target_companies(
     search: str = "",
     priority: str = "",
     status: str = "",
+    city: str = "",
     sort: str = "priority",
-    limit: int = 200,
+    limit: int = 500,
 ) -> list[dict]:
-    """Liste filtrée des entreprises cibles (candidature spontanée)."""
+    """Liste filtrée des entreprises cibles (candidature spontanée).
+
+    Le filtre `city` accepte une sous-chaîne (LIKE) — utile pour matcher
+    "Toulouse" ou "31 - Toulouse" etc.
+    """
     where = []
     params: list[Any] = []
 
@@ -303,6 +316,9 @@ def list_target_companies(
         else:
             where.append("status = ?")
             params.append(status)
+    if city:
+        where.append("LOWER(city) LIKE ?")
+        params.append(f"%{city.lower()}%")
 
     sql = "SELECT * FROM target_companies"
     if where:
@@ -315,6 +331,7 @@ def list_target_companies(
         ),
         "name": "LOWER(name) ASC",
         "sector": "LOWER(sector) ASC NULLS LAST, LOWER(name) ASC",
+        "city": "LOWER(city) ASC NULLS LAST, LOWER(name) ASC",
         "recent": "updated_at DESC",
     }
     sql += " ORDER BY " + sort_clauses.get(sort, sort_clauses["priority"])
@@ -323,6 +340,138 @@ def list_target_companies(
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_company_cities() -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT city FROM target_companies WHERE city IS NOT NULL AND city != '' ORDER BY city"
+        ).fetchall()
+    return [r["city"] for r in rows]
+
+
+def extract_companies_from_offers_by_city(
+    *,
+    city_substr: str,
+    min_score: int = 0,
+    limit: int = 200,
+) -> list[dict]:
+    """Liste les entreprises distinctes (avec offres data/IA) pour une ville.
+
+    Renvoie le nom, secteur déduit (1ère source), nb d'offres, ville, score max.
+    Utilisé pour suggérer des entreprises cibles à candidature spontanée pour
+    une zone (ex : Toulouse). Inclut par défaut TOUTES les offres (même Faible)
+    car l'utilisateur veut des cibles à contacter en spontané, pas un classement IA.
+    """
+    sql = """
+        SELECT
+            company AS name,
+            MAX(source) AS source,
+            COUNT(*) AS n_offers,
+            MAX(match_score) AS max_score,
+            MIN(city) AS city,
+            MAX(url) AS sample_url
+        FROM offers
+        WHERE company IS NOT NULL AND company != ''
+          AND LOWER(city) LIKE :city
+          AND (is_active IS NULL OR is_active = 1)
+          AND (match_score IS NULL OR match_score >= :min_score)
+        GROUP BY LOWER(company)
+        ORDER BY max_score DESC NULLS LAST, n_offers DESC
+        LIMIT :limit
+    """
+    with db() as conn:
+        rows = conn.execute(
+            sql,
+            {"city": f"%{city_substr.lower()}%", "min_score": min_score, "limit": limit},
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def import_companies_from_offers_to_targets(*, city_substr: str, min_score: int = 0) -> dict:
+    """Importe en `target_companies` les entreprises distinctes ayant des
+    offres data/IA sur la ville donnée.
+
+    Pour chaque entreprise distincte, dédup sur LOWER(name). Ajoute avec
+    priorité "Moyenne" par défaut. Marque source = "offre {ville} agrégée".
+    """
+    companies = extract_companies_from_offers_by_city(
+        city_substr=city_substr, min_score=min_score, limit=500
+    )
+    inserted = 0
+    skipped = 0
+    for c in companies:
+        max_score = c.get("max_score")
+        score_note = f" (score max {max_score})" if max_score else ""
+        sample_url = c.get("sample_url") or "(pas d'URL)"
+        data = {
+            "name": c["name"],
+            "city": city_substr.title(),
+            "sector": None,
+            "relevance": (
+                f"Entreprise détectée via {c['n_offers']} offre(s) data/IA"
+                f"{score_note}"
+                f" sur le bassin {city_substr.title()}."
+                f" Cible candidature spontanée."
+            ),
+            "priority": "Moyenne",
+            "contact_channel": "Candidature spontanée directe (site corporate, LinkedIn, email RH)",
+            "notes": f"Offre type vue : {sample_url}",
+            "source": f"offres-agrégées-{city_substr.lower()}",
+        }
+        _id, was_new = insert_target_company(data)
+        if was_new:
+            inserted += 1
+        else:
+            skipped += 1
+    return {"city": city_substr, "candidates": len(companies), "inserted": inserted, "skipped_dup": skipped}
+
+
+def insert_target_company(data: dict) -> tuple[int | None, bool]:
+    """Insère une entreprise cible. Dédup sur LOWER(name).
+
+    Returns:
+        (id, was_new). was_new=False si déjà présente.
+    """
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise ValueError("name required")
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM target_companies WHERE LOWER(name) = LOWER(?)",
+            (name,),
+        ).fetchone()
+        if existing:
+            return existing["id"], False
+        cur = conn.execute(
+            """
+            INSERT INTO target_companies (
+                name, sector, city, relevance, priority, contact_channel,
+                contact_name, notes, feedback, email, reliability,
+                source_url, source
+            ) VALUES (
+                :name, :sector, :city, :relevance, :priority, :contact_channel,
+                :contact_name, :notes, :feedback, :email, :reliability,
+                :source_url, :source
+            )
+            """,
+            {
+                "name": name,
+                "sector": data.get("sector"),
+                "city": data.get("city"),
+                "relevance": data.get("relevance"),
+                "priority": data.get("priority"),
+                "contact_channel": data.get("contact_channel"),
+                "contact_name": data.get("contact_name"),
+                "notes": data.get("notes"),
+                "feedback": data.get("feedback"),
+                "email": data.get("email"),
+                "reliability": data.get("reliability"),
+                "source_url": data.get("source_url"),
+                "source": data.get("source", "manual"),
+            },
+        )
+        return cur.lastrowid, True
 
 
 def get_target_company(company_id: int) -> Optional[dict]:

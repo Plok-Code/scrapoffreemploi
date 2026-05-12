@@ -30,11 +30,27 @@
 {%- endmacro %}
 
 {% block content %}
-<div class="mb-4">
-    <h1 class="text-xl font-semibold">Entreprises cibles — candidature spontanée</h1>
-    <p class="text-sm text-slate-600 mt-1">
-        Liste des entreprises à contacter directement (hors job boards). 65 cibles importées du xlsx historique + à enrichir manuellement.
-    </p>
+<div class="mb-4 flex items-start justify-between gap-4">
+    <div>
+        <h1 class="text-xl font-semibold">Entreprises cibles — candidature spontanée</h1>
+        <p class="text-sm text-slate-600 mt-1">
+            Entreprises à contacter directement (avec ou sans portail).
+            Xlsx historique + enrichissement via offres scrapées.
+        </p>
+    </div>
+    <!-- Bouton d'import : extraire entreprises Toulouse depuis offres scrapées -->
+    <form method="post" action="/api/companies/import-from-offers"
+          class="flex items-end gap-2 text-sm">
+        <div>
+            <label class="block text-xs text-slate-500 mb-0.5">Importer entreprises d'une ville</label>
+            <input type="text" name="city" placeholder="Toulouse" value="Toulouse"
+                   class="px-2 py-1.5 border border-slate-300 rounded text-sm w-36" />
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium whitespace-nowrap">
+            Importer depuis offres
+        </button>
+    </form>
 </div>
 
 <!-- Stats -->
@@ -93,6 +109,15 @@
         </select>
     </div>
     <div>
+        <label class="block text-xs text-slate-500 mb-1">Ville</label>
+        <select name="city" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
+            <option value="">Toutes</option>
+            {% for c in cities %}
+                <option value="{{ c }}" {% if filters.city == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
         <label class="block text-xs text-slate-500 mb-1">Trier par</label>
         <select name="sort" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
             <option value="priority" {% if filters.sort == "priority" %}selected{% endif %}>Priorité</option>
@@ -121,6 +146,7 @@
                 <th class="text-left px-3 py-2 w-20">Priorité</th>
                 <th class="text-left px-3 py-2">Entreprise</th>
                 <th class="text-left px-3 py-2">Secteur</th>
+                <th class="text-left px-3 py-2">Ville</th>
                 <th class="text-left px-3 py-2">Canal de contact</th>
                 <th class="text-left px-3 py-2">Statut</th>
                 <th class="text-left px-3 py-2 w-20">Action</th>
@@ -136,6 +162,7 @@
                     </a>
                 </td>
                 <td class="px-3 py-2 text-slate-700 text-xs">{{ c.sector or "—" }}</td>
+                <td class="px-3 py-2 text-slate-600 text-xs">{{ c.city or "—" }}</td>
                 <td class="px-3 py-2 text-slate-600 text-xs max-w-md truncate">{{ c.contact_channel or "—" }}</td>
                 <td class="px-3 py-2">{{ status_badge(c.status) }}</td>
                 <td class="px-3 py-2">
@@ -146,7 +173,7 @@
                 </td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="text-center py-8 text-slate-400">Aucune entreprise.</td></tr>
+            <tr><td colspan="7" class="text-center py-8 text-slate-400">Aucune entreprise.</td></tr>
             {% endfor %}
         </tbody>
     </table>

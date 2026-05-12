@@ -472,3 +472,180 @@ def check_alive(
         archived_soft=archived_soft,
         inconclusive=inconclusive,
     )
+
+
+# --- Suppression auto des offres mortes sans statut user ---
+
+@dataclass
+class CleanupResult:
+    total_checked: int
+    deleted: int            # URL morte + status NULL → supprimé
+    archived: int           # URL morte mais status renseigné → archived seulement
+    inconclusive: int       # 403/timeout → on touche pas
+    still_alive: int
+
+
+def cleanup_dead_unstatused(
+    *,
+    min_score: int | None = None,
+    sleep_between: float = 0.5,
+    limit: int | None = None,
+) -> CleanupResult:
+    """Ping chaque URL et SUPPRIME les offres mortes sans statut user.
+
+    Règle métier :
+    - URL morte (404/410/soft-404) + `status IS NULL` → DELETE de la DB
+    - URL morte + `status IS NOT NULL` → garder mais marquer `is_active=0`
+      (l'user a postulé ou a une trace utile)
+    - URL vivante → marquer `is_active=1`
+    - URL 403/timeout → on ne touche pas
+
+    Returns:
+        Stats du nettoyage.
+    """
+    where = ["url IS NOT NULL", "url != ''"]
+    params: list = []
+    if min_score is not None:
+        where.append("match_score >= ?")
+        params.append(min_score)
+    sql = f"SELECT id, url, status FROM offers WHERE {' AND '.join(where)} ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    with db() as conn:
+        candidates = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    deleted = 0
+    archived = 0
+    alive = 0
+    inconclusive = 0
+    with httpx.Client(
+        headers=DEFAULT_HEADERS,
+        timeout=httpx.Timeout(15.0, connect=8.0),
+        follow_redirects=True,
+    ) as client:
+        for i, off in enumerate(candidates, 1):
+            url = off["url"]
+            has_status = bool(off["status"])
+            is_dead = False
+
+            # Workday-specific check d'abord
+            wd_verdict = _probe_workday_api(url, client)
+            if wd_verdict is False:
+                is_dead = True
+            elif wd_verdict is True:
+                pass  # alive
+            else:
+                # HTTP check
+                try:
+                    resp = client.get(url)
+                except Exception:  # noqa: BLE001
+                    inconclusive += 1
+                    if i < len(candidates):
+                        polite_sleep(sleep_between)
+                    continue
+
+                if resp.status_code in _ARCHIVED_STATUS:
+                    is_dead = True
+                elif resp.status_code in _INCONCLUSIVE_STATUS:
+                    inconclusive += 1
+                    if i < len(candidates):
+                        polite_sleep(sleep_between)
+                    continue
+                elif 200 <= resp.status_code < 400:
+                    if _is_soft_404(resp.text, original_url=url, final_url=str(resp.url)):
+                        is_dead = True
+                else:
+                    inconclusive += 1
+                    if i < len(candidates):
+                        polite_sleep(sleep_between)
+                    continue
+
+            if is_dead:
+                if has_status:
+                    queries.set_alive_state(off["id"], is_active=False)
+                    archived += 1
+                else:
+                    queries.delete_offer(off["id"])
+                    deleted += 1
+            else:
+                queries.set_alive_state(off["id"], is_active=True)
+                alive += 1
+
+            if i < len(candidates):
+                polite_sleep(sleep_between)
+
+    return CleanupResult(
+        total_checked=len(candidates),
+        deleted=deleted,
+        archived=archived,
+        inconclusive=inconclusive,
+        still_alive=alive,
+    )
+
+
+# --- Scrape global : toutes les sources + cleanup + scoring auto ---
+
+@dataclass
+class FullScrapeResult:
+    cleanup: CleanupResult | None
+    per_source: dict[str, ScrapeResult]
+    total_new: int
+    scoring_applied: int
+
+
+def run_full_scrape(
+    *,
+    sources: list[str] | None = None,
+    max_pages: int = 5,
+    do_cleanup: bool = True,
+    do_auto_score: bool = True,
+) -> FullScrapeResult:
+    """Lance un scrape multi-source complet : cleanup → scrape × N → scoring auto.
+
+    Args:
+        sources: liste des scrapers à lancer. None = tous les disponibles.
+        max_pages: pages max par mot-clé pour chaque source.
+        do_cleanup: si True, ping URLs existantes et supprime celles mortes+sans statut.
+        do_auto_score: si True, lance le heuristic scorer sur les nouvelles offres.
+    """
+    from backend.scrapers.registry import list_scrapers
+
+    if sources is None:
+        # On ne lance que les sources qui ont un vrai fetch_list (pas generic)
+        sources = [s for s in list_scrapers() if s != "generic"]
+
+    cleanup_result: CleanupResult | None = None
+    if do_cleanup:
+        cleanup_result = cleanup_dead_unstatused(sleep_between=0.3)
+
+    per_source: dict[str, ScrapeResult] = {}
+    total_new = 0
+    for src in sources:
+        try:
+            r = run_scrape(src, max_pages=max_pages, generate_batch=False)
+            per_source[src] = r
+            total_new += r.total_new
+        except Exception as e:  # noqa: BLE001
+            # On enregistre l'erreur mais on continue avec les autres sources
+            per_source[src] = ScrapeResult(
+                source=src, total_fetched=0, total_new=0,
+                total_duplicates=0, batch_file=None, new_ids=[],
+            )
+            queries.record_scrape_run(
+                sources=src, total_fetched=0, total_new=0,
+                total_duplicates=0, error=str(e),
+            )
+
+    scoring_applied = 0
+    if do_auto_score and total_new > 0:
+        from backend.heuristic_scorer import apply_heuristic_to_unscored
+        result = apply_heuristic_to_unscored()
+        scoring_applied = result["updated"]
+
+    return FullScrapeResult(
+        cleanup=cleanup_result,
+        per_source=per_source,
+        total_new=total_new,
+        scoring_applied=scoring_applied,
+    )

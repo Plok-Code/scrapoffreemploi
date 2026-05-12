@@ -6,6 +6,41 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint 2 (12 mai 2026 soir) : "Tout scraper" en un clic + cleanup auto + Toulouse
+
+#### Bouton "Tout scraper" (mode recommandé)
+- **API** : `POST /api/scrape` accepte maintenant `source=all` → lance le workflow complet en arrière-plan via `run_full_scrape()` :
+  1. **Cleanup** : ping toutes les URLs existantes (Workday API JSON inclus, soft-404 detection 4 niveaux).
+  2. **Scrape multi-sources** : FT (API officielle) → WTTJ (Algolia) → HelloWork (HTML+JSON-LD), dédup automatique (URL + dedup_key titre+entreprise).
+  3. **Scoring auto** : `apply_heuristic_to_unscored()` post-scrape → toutes les nouvelles offres ont un score immédiatement.
+- **`_SCRAPE_STATE`** enrichi avec : `step`, `deleted_dead`, `archived_dead`, `scoring_applied`, `per_source` (détail par scraper).
+- **UI** : panneau "Scraper" repensé avec 2 modes — "Tout scraper (recommandé)" en bouton emerald principal + section repliée pour scraper une seule source. Status display détaillé (delete/archive/scoring counters + breakdown par source).
+
+#### Cleanup auto des URLs mortes (avec règle métier)
+- **`backend/scrapers/runner.cleanup_dead_unstatused()`** : ping HTTP de chaque URL, applique la règle :
+  - URL morte (404/410/soft-404/Workday API 404) **+ status NULL** → `DELETE` de la DB (offre supprimée définitivement)
+  - URL morte **+ status NOT NULL** (postulé/refusé/entretien/etc.) → `is_active = 0` (archivée pour l'historique applicatif)
+  - URL vivante → `is_active = 1` (rafraîchit le statut)
+  - 403/timeout → ne touche pas (ambigus)
+- **`queries.delete_offer(offer_id)`** : helper pour DELETE direct (réservé au cleanup).
+- Intégré automatiquement au début de `run_full_scrape(do_cleanup=True)`.
+
+#### Page Entreprises — Toulouse + filtre ville + import depuis offres
+- **Migration DB** : ajout colonnes `target_companies.city TEXT` et `target_companies.source TEXT` via ALTER conditionnel dans `init_schema()`.
+- **`queries.extract_companies_from_offers_by_city(city_substr)`** : agrège les entreprises distinctes ayant des offres pour une ville donnée (matching LIKE %ville%).
+- **`queries.import_companies_from_offers_to_targets(city_substr)`** : insère ces entreprises dans `target_companies` avec source `"offres-agrégées-{ville}"`, dédup sur LOWER(name).
+- **Route** : `POST /api/companies/import-from-offers` (Form `city`) → import en un clic depuis l'UI.
+- **UI** : 
+  - Filtre **Ville** ajouté à la barre de filtres (`/companies?city=Toulouse`).
+  - Nouvelle colonne **Ville** dans le tableau.
+  - Bouton **"Importer depuis offres"** en haut de la page (formulaire avec input ville, défaut "Toulouse").
+- **Résultat E2E sur Toulouse** : 14 entreprises importées (Thales, Sopra Steria, ONERA, CLS Ramonville, etc.) en plus des 65 du xlsx historique. Total target_companies = **79**.
+
+#### La Bonne Boite v2 — tentative bloquée (HTTP 403)
+- `backend/scrapers/labonneboite.py` codé (OAuth scope `api_labonneboitev2`, endpoint `partenaire/labonneboite/v2/company/`, params `latitude/longitude/distance/rome_codes`).
+- **Test échoue avec 403** malgré scope valide et endpoint correct (vérifié via context7). Cause probable : l'API LBB v2 nécessite une **habilitation supplémentaire** côté FT au-delà de la simple souscription dans le catalogue.
+- Décision : **skip LBB pour l'instant**, l'extraction depuis les offres scrapées (Toulouse a déjà 33+ offres avec city "31 - Toulouse") fait largement le job.
+
 ### Added — Sprint final 12 mai 2026 : UI complète + Page Entreprises + Scoring de masse
 
 #### Page Entreprises (phase 2)

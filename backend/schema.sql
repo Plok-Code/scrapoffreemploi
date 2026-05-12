@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS target_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     sector TEXT,
+    city TEXT,                       -- "Toulouse", "Paris", "Lyon"... (nullable, ville principale)
     relevance TEXT,                  -- "Pourquoi pertinent (AI Engineer)"
     priority TEXT,                   -- "Haute", "Moyenne", "Basse"
     contact_channel TEXT,            -- "Portail Airbus Careers / Workday..."
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS target_companies (
     email TEXT,                      -- "Pas de mail RH fiable" ou un email
     reliability TEXT,                -- "Portail officiel indispensable"
     source_url TEXT,                 -- URL portail
+    source TEXT,                     -- "xlsx historique", "La Bonne Boite", "manual"
     -- Tracking applicatif
     status TEXT,                     -- "Contacté", "Relancé", "Refusé", "Entretien", etc.
     date_contacted TEXT,
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS target_companies (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_target_companies_name ON target_companies(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_target_companies_priority ON target_companies(priority);
 CREATE INDEX IF NOT EXISTS idx_target_companies_status ON target_companies(status);
+CREATE INDEX IF NOT EXISTS idx_target_companies_city ON target_companies(LOWER(city));
 
 CREATE TRIGGER IF NOT EXISTS target_companies_updated_at
 AFTER UPDATE ON target_companies

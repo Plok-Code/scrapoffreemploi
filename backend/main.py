@@ -132,13 +132,15 @@ def page_companies(
     search: str = "",
     priority: str = "",
     status: str = "",
+    city: str = "",
     sort: str = "priority",
 ):
     companies = queries.list_target_companies(
-        search=search, priority=priority, status=status, sort=sort
+        search=search, priority=priority, status=status, city=city, sort=sort
     )
     stats = queries.get_company_stats()
     priorities = queries.list_company_priorities()
+    cities = queries.list_company_cities()
     return templates.TemplateResponse(
         "companies.html",
         {
@@ -146,11 +148,13 @@ def page_companies(
             "companies": companies,
             "stats": stats,
             "priorities": priorities,
+            "cities": cities,
             "statuses": VALID_COMPANY_STATUSES,
             "filters": {
                 "search": search,
                 "priority": priority,
                 "status": status,
+                "city": city,
                 "sort": sort,
             },
             "page": "companies",
@@ -232,7 +236,7 @@ _SCRAPE_STATE: dict = {
 
 
 def _run_scrape_bg(source: str, max_pages: int) -> None:
-    """Tâche d'arrière-plan exécutée par BackgroundTasks."""
+    """Tâche d'arrière-plan : scrape d'une seule source."""
     from datetime import datetime
 
     from backend.scrapers.runner import run_scrape
@@ -240,11 +244,14 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
     _SCRAPE_STATE.update({
         "running": True,
         "source": source,
+        "step": "scraping",
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
         "total_fetched": 0,
         "total_new": 0,
         "total_duplicates": 0,
+        "deleted_dead": 0,
+        "scoring_applied": 0,
         "error": None,
     })
     try:
@@ -258,19 +265,86 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
         _SCRAPE_STATE["error"] = str(e)
     finally:
         _SCRAPE_STATE["running"] = False
+        _SCRAPE_STATE["step"] = "done"
+        _SCRAPE_STATE["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _run_full_scrape_bg(max_pages: int) -> None:
+    """Tâche d'arrière-plan : scrape TOUTES les sources + cleanup + scoring auto.
+
+    Étapes :
+    1. Cleanup : ping URLs existantes, supprime celles 404+sans statut user, archive les autres.
+    2. Scrape : FT + WTTJ + HelloWork (séquentiel, dédup auto).
+    3. Scoring auto : heuristique v2 sur les nouvelles offres.
+    """
+    from datetime import datetime
+
+    from backend.scrapers.runner import run_full_scrape
+
+    _SCRAPE_STATE.update({
+        "running": True,
+        "source": "ALL (FT+WTTJ+HW)",
+        "step": "starting",
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "finished_at": None,
+        "total_fetched": 0,
+        "total_new": 0,
+        "total_duplicates": 0,
+        "deleted_dead": 0,
+        "archived_dead": 0,
+        "scoring_applied": 0,
+        "per_source": {},
+        "error": None,
+    })
+    try:
+        _SCRAPE_STATE["step"] = "cleanup (ping URLs existantes)"
+        result = run_full_scrape(max_pages=max_pages, do_cleanup=True, do_auto_score=True)
+        cleanup = result.cleanup
+        per_source_summary = {
+            src: {
+                "fetched": r.total_fetched,
+                "new": r.total_new,
+                "dup": r.total_duplicates,
+            }
+            for src, r in result.per_source.items()
+        }
+        _SCRAPE_STATE.update({
+            "step": "done",
+            "total_fetched": sum(r.total_fetched for r in result.per_source.values()),
+            "total_new": result.total_new,
+            "total_duplicates": sum(r.total_duplicates for r in result.per_source.values()),
+            "deleted_dead": cleanup.deleted if cleanup else 0,
+            "archived_dead": cleanup.archived if cleanup else 0,
+            "scoring_applied": result.scoring_applied,
+            "per_source": per_source_summary,
+        })
+    except Exception as e:  # noqa: BLE001
+        _SCRAPE_STATE["error"] = str(e)
+    finally:
+        _SCRAPE_STATE["running"] = False
         _SCRAPE_STATE["finished_at"] = datetime.now().isoformat(timespec="seconds")
 
 
 @app.post("/api/scrape")
 def api_scrape(bg: BackgroundTasks, source: str = Form(...), max_pages: int = Form(3)):
-    """Lance un scrape en arrière-plan. Statut via GET /api/scrape/status."""
+    """Lance un scrape en arrière-plan.
+
+    `source=all` ou `source=ALL` lance un scrape multi-source : cleanup + FT + WTTJ + HW + scoring.
+    Sinon, scrape de la source unique nommée.
+    Statut via GET /api/scrape/status.
+    """
     from backend.scrapers.registry import list_scrapers
+
+    if _SCRAPE_STATE["running"]:
+        raise HTTPException(409, f"Un scrape '{_SCRAPE_STATE.get('source')}' est déjà en cours.")
+
+    if source.lower() == "all":
+        bg.add_task(_run_full_scrape_bg, max_pages)
+        return {"ok": True, "source": "ALL", "max_pages": max_pages}
 
     available = set(list_scrapers())
     if source not in available:
         raise HTTPException(400, f"Source inconnue : {source}. Dispo : {sorted(available)}")
-    if _SCRAPE_STATE["running"]:
-        raise HTTPException(409, f"Un scrape '{_SCRAPE_STATE['source']}' est déjà en cours.")
     bg.add_task(_run_scrape_bg, source, max_pages)
     return {"ok": True, "source": source, "max_pages": max_pages}
 
@@ -279,3 +353,14 @@ def api_scrape(bg: BackgroundTasks, source: str = Form(...), max_pages: int = Fo
 def api_scrape_status():
     """Renvoie l'état du scrape en cours (ou du dernier)."""
     return _SCRAPE_STATE
+
+
+# ---------- API Toulouse / Companies extraction ----------
+
+@app.post("/api/companies/import-from-offers")
+def api_import_companies_from_offers(city: str = Form(...)):
+    """Importe en `target_companies` les entreprises distinctes des offres pour
+    une ville donnée (ex Toulouse). Permet d'enrichir la liste de cibles
+    candidature spontanée."""
+    result = queries.import_companies_from_offers_to_targets(city_substr=city, min_score=0)
+    return result

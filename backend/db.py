@@ -53,6 +53,17 @@ def init_schema() -> None:
                 conn.execute("UPDATE offers SET is_active = 1 WHERE is_active IS NULL")
             if "last_checked_at" not in cols:
                 conn.execute("ALTER TABLE offers ADD COLUMN last_checked_at TEXT")
+        # Migration target_companies (colonnes city + source ajoutées après v1)
+        target_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='target_companies'"
+        ).fetchone()
+        if target_table:
+            tc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(target_companies)").fetchall()}
+            if "city" not in tc_cols:
+                conn.execute("ALTER TABLE target_companies ADD COLUMN city TEXT")
+            if "source" not in tc_cols:
+                conn.execute("ALTER TABLE target_companies ADD COLUMN source TEXT")
+                conn.execute("UPDATE target_companies SET source = 'xlsx historique' WHERE source IS NULL")
         # Étape 2 : appliquer le schéma complet (CREATE IF NOT EXISTS + indexes)
         conn.executescript(schema)
 
