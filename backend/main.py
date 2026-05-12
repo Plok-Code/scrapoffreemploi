@@ -30,8 +30,21 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 @app.on_event("startup")
 def _startup() -> None:
-    """S'assure que le schéma existe."""
+    """S'assure que le schéma existe + reset l'état scrape (bug #3 audit).
+
+    Sans reset, si le serveur est tué pendant un scrape, `_SCRAPE_STATE['running']`
+    reste à True à tout jamais → impossible de relancer un scrape sans hack manuel.
+    Au boot, on force `running=False` pour signaler "le précédent scrape (s'il y
+    en avait un) est mort avec le serveur".
+    """
     init_schema()
+    if _SCRAPE_STATE.get("running"):
+        logger.warning(
+            "Reset _SCRAPE_STATE au boot : un scrape était marqué 'running' "
+            "(probablement tué avec le serveur précédent)"
+        )
+    _SCRAPE_STATE["running"] = False
+    _SCRAPE_STATE["step"] = "idle"
 
 
 # ---------- Pages ----------
@@ -395,6 +408,22 @@ def api_scrape(
 def api_scrape_status():
     """Renvoie l'état du scrape en cours (ou du dernier)."""
     return _SCRAPE_STATE
+
+
+@app.post("/api/scrape/reset")
+def api_scrape_reset():
+    """Reset manuel de l'état scrape (escape-hatch si bloqué sur 'running').
+
+    À utiliser si un scrape a planté silencieusement et que `_SCRAPE_STATE['running']`
+    est resté à True. Le boot reset auto déjà au démarrage, mais cette route
+    permet de forcer sans redémarrer le serveur.
+    """
+    was_running = _SCRAPE_STATE.get("running", False)
+    _SCRAPE_STATE["running"] = False
+    _SCRAPE_STATE["step"] = "reset (manual)"
+    _SCRAPE_STATE["error"] = "Reset manuel par utilisateur"
+    logger.warning("Reset manuel de _SCRAPE_STATE (was_running={r})", r=was_running)
+    return {"ok": True, "was_running": was_running}
 
 
 # ---------- API Toulouse / Companies extraction ----------

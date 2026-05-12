@@ -75,7 +75,7 @@ def init_schema() -> None:
 
 
 def normalize_for_dedup(text: str | None) -> str:
-    """Normalise une string pour la clé de dédup (titre+entreprise)."""
+    """Normalise une string pour la clé de dédup (titre+entreprise+ville)."""
     if not text:
         return ""
     import re
@@ -84,5 +84,48 @@ def normalize_for_dedup(text: str | None) -> str:
     return s.strip()
 
 
-def make_dedup_key(title: str | None, company: str | None) -> str:
-    return f"{normalize_for_dedup(title)}|{normalize_for_dedup(company)}"
+def normalize_city_for_dedup(city: str | None) -> str:
+    """Normalise une ville pour le dédup.
+
+    Cas gérés :
+    - "Paris" / "75 - Paris" / "75 paris" / "PARIS" → "paris"
+    - "31 - Toulouse" / "Toulouse (31), France" → "toulouse"
+    - "Pau (Bordes)" → "pau" (parenthèses retirées)
+    - "Paris, France" / "Paris (France)" → "paris"
+    - "" / None → ""
+    """
+    if not city:
+        return ""
+    import re
+    s = str(city).strip().lower()
+    # Vire les parenthèses et leur contenu (Pau (Bordes) → Pau)
+    s = re.sub(r"\([^)]*\)", " ", s)
+    # Normalise espaces et ponctuation
+    s = re.sub(r"[\s\W]+", " ", s).strip()
+    # Vire les codes département en début (75 paris → paris, 75 - paris → paris)
+    s = re.sub(r"^\d{2,3}\s+", "", s)
+    # Vire les suffixes inutiles (paris france → paris)
+    s = re.sub(r"\s+france\b.*$", "", s)
+    return s.strip()
+
+
+def make_dedup_key(
+    title: str | None,
+    company: str | None,
+    city: str | None = None,
+) -> str:
+    """Clé de dédup pour une offre.
+
+    Capture (titre, entreprise, ville) — la ville est essentielle car la même
+    offre Capgemini "AI Engineer" peut exister à Paris ET Toulouse en tant que
+    DEUX postes distincts. Sans la ville, on jetterait l'un comme doublon.
+
+    La ville est normalisée pour matcher les variantes :
+        "Paris" == "75 - Paris" == "Paris, France"
+    """
+    parts = [
+        normalize_for_dedup(title),
+        normalize_for_dedup(company),
+        normalize_city_for_dedup(city),
+    ]
+    return "|".join(parts)

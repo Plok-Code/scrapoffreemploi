@@ -20,6 +20,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from backend import queries
+from backend._logging import logger
 from backend.db import db
 from backend.scrapers._http import DEFAULT_HEADERS, polite_sleep
 from backend.scrapers._keywords import matches_keywords
@@ -585,15 +586,23 @@ def scrape_target_company_portals(
                                 raw_offers = _fetch_greenhouse_jobs(
                                     embedded_slug, company_name, client
                                 )
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "Greenhouse embed detection KO company={c} url={u} err={err}",
+                            c=company_name, u=url, err=str(e),
+                        )
                     if not raw_offers:
                         raw_offers = _fetch_generic_career_page(url, company_name, client)
                     # Dernier recours : Playwright pour SPAs React qui n'ont rien donné
                     if not raw_offers and use_playwright_fallback:
                         raw_offers = _fetch_playwright_page(url, company_name)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                # Échec global du dispatcher pour ce portail — on log pour debug
+                logger.warning(
+                    "Portail dispatch KO company={c} url={u} err={err}",
+                    c=company_name, u=url, err=str(e),
+                )
+                logger.opt(exception=True).debug("Traceback portail {c}", c=company_name)
 
             if raw_offers:
                 portals_succeeded += 1

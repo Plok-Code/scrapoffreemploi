@@ -188,7 +188,7 @@ def set_alive_state(offer_id: int, *, is_active: bool) -> bool:
 
 
 def insert_offer(offer_data: dict) -> tuple[int | None, bool]:
-    """Insère une offre nouvelle. Dédup par URL puis par dedup_key.
+    """Insère une offre nouvelle. Dédup par URL puis par dedup_key (title+company+city).
 
     Returns:
         (offer_id, was_new) — was_new=False si doublon (offer_id du doublon retourné).
@@ -197,11 +197,15 @@ def insert_offer(offer_data: dict) -> tuple[int | None, bool]:
 
     title = offer_data.get("title")
     company = offer_data.get("company")
+    city = offer_data.get("city")
     url = offer_data.get("url")
     if not title:
         raise ValueError("Offer must have a title")
 
-    dedup_key = make_dedup_key(title, company)
+    # IMPORTANT : la ville fait partie du dedup_key.
+    # Sinon "AI Engineer Capgemini Paris" et "AI Engineer Capgemini Toulouse"
+    # seraient considérés comme doublons (bug majeur pour la recherche d'emploi).
+    dedup_key = make_dedup_key(title, company, city)
 
     with db() as conn:
         # 1) Vérif URL
@@ -245,6 +249,95 @@ def insert_offer(offer_data: dict) -> tuple[int | None, bool]:
         }
         cur = conn.execute(sql, params)
         return cur.lastrowid, True
+
+
+def insert_offers_bulk(offers: list[dict]) -> tuple[list[int], int]:
+    """Insère un batch d'offres en UNE SEULE transaction (bien plus rapide
+    que `insert_offer` × N).
+
+    Dédup en mémoire avant l'INSERT (URL + dedup_key calculé via title+company+city).
+
+    Returns:
+        (new_ids, duplicates_count). `new_ids` = liste des ids des offres réellement
+        insérées (taille ≤ len(offers)). `duplicates_count` = nb de doublons skippés.
+    """
+    from backend.db import make_dedup_key
+
+    if not offers:
+        return [], 0
+
+    new_ids: list[int] = []
+    duplicates = 0
+    insert_sql = """
+        INSERT INTO offers (
+            title, company, city, department, source, url, description,
+            date_published, remote, contract_type, salary, dedup_key, scraped_at
+        ) VALUES (
+            :title, :company, :city, :department, :source, :url, :description,
+            :date_published, :remote, :contract_type, :salary, :dedup_key,
+            CURRENT_TIMESTAMP
+        )
+    """
+    with db() as conn:
+        # Charge les URLs et dedup_keys existants en mémoire (1 seule query)
+        existing_urls = {
+            r["url"] for r in conn.execute(
+                "SELECT url FROM offers WHERE url IS NOT NULL AND url != ''"
+            ).fetchall()
+        }
+        existing_dedup_keys = {
+            r["dedup_key"] for r in conn.execute(
+                "SELECT dedup_key FROM offers WHERE dedup_key IS NOT NULL"
+            ).fetchall()
+        }
+
+        seen_in_batch_urls: set[str] = set()
+        seen_in_batch_keys: set[str] = set()
+        to_insert: list[dict] = []
+        for off in offers:
+            title = off.get("title")
+            if not title:
+                continue
+            url = off.get("url")
+            key = make_dedup_key(title, off.get("company"), off.get("city"))
+            # Dédup contre la DB
+            if url and url in existing_urls:
+                duplicates += 1
+                continue
+            if key in existing_dedup_keys:
+                duplicates += 1
+                continue
+            # Dédup contre le batch lui-même (au cas où le scraper retourne des doublons)
+            if url and url in seen_in_batch_urls:
+                duplicates += 1
+                continue
+            if key in seen_in_batch_keys:
+                duplicates += 1
+                continue
+            if url:
+                seen_in_batch_urls.add(url)
+            seen_in_batch_keys.add(key)
+            to_insert.append({
+                "title": title,
+                "company": off.get("company"),
+                "city": off.get("city"),
+                "department": off.get("department"),
+                "source": off.get("source"),
+                "url": url,
+                "description": off.get("description"),
+                "date_published": off.get("date_published"),
+                "remote": off.get("remote"),
+                "contract_type": off.get("contract_type"),
+                "salary": off.get("salary"),
+                "dedup_key": key,
+            })
+
+        # Single transaction : executemany avec lastrowid pour récupérer les ids
+        for params in to_insert:
+            cur = conn.execute(insert_sql, params)
+            new_ids.append(cur.lastrowid)
+
+    return new_ids, duplicates
 
 
 def record_scrape_run(

@@ -65,10 +65,9 @@ def run_scrape(
         max_pages=max_pages,
     )
 
-    new_ids: list[int] = []
-    duplicates = 0
-    for raw in raw_offers:
-        offer_id, was_new = queries.insert_offer({
+    # Bulk insert : 1 seule transaction au lieu de N (gain x10-x50 sur 1000 offres).
+    payload = [
+        {
             "title": raw.title,
             "company": raw.company,
             "city": raw.city,
@@ -80,11 +79,10 @@ def run_scrape(
             "remote": raw.remote,
             "contract_type": raw.contract_type or "Alternance",
             "salary": raw.salary,
-        })
-        if was_new and offer_id is not None:
-            new_ids.append(offer_id)
-        else:
-            duplicates += 1
+        }
+        for raw in raw_offers
+    ]
+    new_ids, duplicates = queries.insert_offers_bulk(payload)
 
     batch_path = None
     if generate_batch and new_ids:
@@ -203,7 +201,14 @@ def enrich_descriptions(
         scraper = scraper_cache[src]
         try:
             desc = scraper.fetch_detail(off["url"])
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # NE PAS avaler silencieusement : log l'offre + l'erreur complète.
+            # Permet de diagnostiquer un changement de design HTML qui casse le scraper.
+            logger.warning(
+                "fetch_detail KO offer_id={oid} url={url} source={src} err={err}",
+                oid=off["id"], url=off["url"], src=src, err=str(e),
+            )
+            logger.opt(exception=True).debug("Traceback fetch_detail offer_id={oid}", oid=off["id"])
             failed += 1
             continue
         if desc:
@@ -451,7 +456,11 @@ def check_alive(
             try:
                 resp = client.get(url)
                 status = resp.status_code
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    "check_alive HTTP error offer_id={oid} url={url} err={err}",
+                    oid=off["id"], url=url, err=str(e),
+                )
                 inconclusive += 1
                 continue
             if status in _ARCHIVED_STATUS:
@@ -546,7 +555,11 @@ def cleanup_dead_unstatused(
                 # HTTP check
                 try:
                     resp = client.get(url)
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(
+                        "cleanup_dead HTTP error offer_id={oid} url={url} err={err}",
+                        oid=off["id"], url=url, err=str(e),
+                    )
                     inconclusive += 1
                     if i < len(candidates):
                         polite_sleep(sleep_between)
