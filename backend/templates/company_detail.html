@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}{{ company.name }} — Entreprise{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/companies" class="text-sm text-slate-600 hover:underline">← Retour à la liste</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Colonne gauche : infos entreprise -->
+    <div class="lg:col-span-2 bg-white border border-slate-200 rounded p-5">
+        <div class="flex items-start justify-between gap-4 mb-4">
+            <div>
+                <h1 class="text-2xl font-semibold">{{ company.name }}</h1>
+                <p class="text-sm text-slate-600 mt-1">{{ company.sector or "Secteur non précisé" }}</p>
+            </div>
+            <div class="text-right">
+                {% if company.priority == "Haute" %}
+                    <span class="inline-block px-2 py-1 text-xs rounded bg-rose-100 text-rose-800 font-medium">Priorité {{ company.priority }}</span>
+                {% elif company.priority == "Moyenne" %}
+                    <span class="inline-block px-2 py-1 text-xs rounded bg-amber-100 text-amber-800 font-medium">Priorité {{ company.priority }}</span>
+                {% elif company.priority == "Basse" %}
+                    <span class="inline-block px-2 py-1 text-xs rounded bg-slate-100 text-slate-700">Priorité {{ company.priority }}</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if company.relevance %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Pourquoi pertinent (AI Engineer)</h2>
+            <p class="text-sm text-slate-800 whitespace-pre-line">{{ company.relevance }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.contact_channel %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Canal de contact</h2>
+            <p class="text-sm text-slate-800 whitespace-pre-line">{{ company.contact_channel }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.contact_name %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Personne / poste</h2>
+            <p class="text-sm text-slate-800 whitespace-pre-line">{{ company.contact_name }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.email %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Email / contact direct</h2>
+            <p class="text-sm text-slate-800">{{ company.email }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.reliability %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Fiabilité</h2>
+            <p class="text-sm text-slate-800">{{ company.reliability }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.notes %}
+        <section class="mt-4">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-2">Notes (xlsx historique)</h2>
+            <p class="text-sm text-slate-700 whitespace-pre-line">{{ company.notes }}</p>
+        </section>
+        {% endif %}
+
+        {% if company.source_url %}
+        <section class="mt-4">
+            <a href="{{ company.source_url }}" target="_blank" rel="noopener"
+               class="inline-block text-sm text-blue-600 hover:underline">
+                Portail officiel ↗
+            </a>
+        </section>
+        {% endif %}
+    </div>
+
+    <!-- Colonne droite : tracking -->
+    <div class="bg-white border border-slate-200 rounded p-5">
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-600 mb-3">Tracking</h2>
+        <form method="post" action="/companies/{{ company.id }}" class="space-y-3">
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Statut</label>
+                <select name="status" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                    <option value="">— (à contacter)</option>
+                    {% for s in statuses %}
+                        <option value="{{ s }}" {% if company.status == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Priorité</label>
+                <select name="priority" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                    <option value="">—</option>
+                    {% for p in priorities %}
+                        <option value="{{ p }}" {% if company.priority == p %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Date contact</label>
+                <input type="date" name="date_contacted" value="{{ company.date_contacted or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Date relance prévue</label>
+                <input type="date" name="date_followup" value="{{ company.date_followup or '' }}"
+                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Retour / notes perso</label>
+                <textarea name="feedback" rows="3"
+                          class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">{{ company.feedback or '' }}</textarea>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-500 mb-1">Notes</label>
+                <textarea name="notes" rows="3"
+                          class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">{{ company.notes or '' }}</textarea>
+            </div>
+            <button type="submit" class="w-full px-3 py-2 bg-slate-900 hover:bg-slate-700 text-white rounded text-sm font-medium">
+                Enregistrer
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -6,6 +6,167 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint final 12 mai 2026 : UI complète + Page Entreprises + Scoring de masse
+
+#### Page Entreprises (phase 2)
+- **DB** : nouvelle table `target_companies` (15 colonnes : name, sector, relevance, priority, contact_channel, status, dates, notes, feedback, etc.) + index sur LOWER(name)/priority/status + trigger updated_at.
+- **Migration** : import depuis `data/companies_spontaneous_extracted.json` → **65 entreprises** insérées (6 dédupliquées par nom).
+- **`queries.py`** : `list_target_companies`, `get_target_company`, `update_target_company`, `get_company_stats`, `list_company_priorities`.
+- **Routes** : `GET /companies` (liste + filtres priority/status/search/sort), `GET /companies/{id}` (détail), `POST /companies/{id}` (update tracking).
+- **Templates** : `companies.html` (tableau + stats + filtres, palette rose/amber pour priorité Haute/Moyenne), `company_detail.html` (col gauche infos xlsx historique + col droite form tracking).
+- **`models.py`** : nouvelle constante `VALID_COMPANY_STATUSES` (Contacté/Relancé/Entretien/Refusé/Sans réponse/Abandonné).
+- **`base.html`** : nav avec liens "Offres" / "Entreprises" actifs selon page.
+
+#### Bouton "Scraper" UI (avec progress live)
+- **API** : `POST /api/scrape` (BackgroundTasks, accepte source+max_pages), `GET /api/scrape/status` (état in-memory).
+- **`_SCRAPE_STATE`** : dict global (running, source, started_at, finished_at, total_fetched, total_new, total_duplicates, error).
+- **UI** : `<details>` dans la nav → formulaire HTMX. Le statut se met à jour via `hx-trigger="load, every 3s"`. JS minimal pour formater le JSON renvoyé en HTML (running/error/done avec stats).
+
+#### Filtre "Inclure archivées"
+- `queries.list_offers(include_archived=...)` documenté + ajouté.
+- `offers.html` : checkbox dans la barre de filtres. Quand cochée, affiche aussi les offres `is_active=0`.
+
+#### Scoring heuristique automatique (v1 → v2)
+- **`backend/heuristic_scorer.py`** : nouveau module. Compte les mots-clés techniques par axe (Pipeline/Exploration/Modélisation/Déploiement/Cadrage), poids variable (ex : `MLOps`=12, `LLM`=10, `RAG`=10, `Databricks`=9, `PyTorch`=7, etc.). Cap à 20 par axe.
+- **Pénalités v2** (post-feedback "beaucoup de CDI dans le top heuristique") :
+  - Stage (pas alternance) : −15
+  - Senior / Confirmé / Tech Lead / Lead Data/ML/AI / Manager / Architecte / Expert / Directeur / Responsable : −12 à −20 chacun
+  - BTS bac+2 : −8, formation à distance : −5
+  - **Absence du mot "alternance/apprentissage" dans le texte : −25** (catch les CDI faussement taggés E1/E2 par FT)
+- **Bonus v2** : Bac+5 / Master / Mastère : +4, "alternant"/"apprenti" explicite : +6, alternance+AI/ML engineer combo : +5.
+- **CLI** : `python -m backend.heuristic_scorer [--rescore]` → `--rescore` ré-écrase aussi les scores déjà heuristiques.
+- **Reasoning auto-marqué** : `auto:heuristic-v1 (total=X, axes=A+B+C+D+E)` → identifiable et écrasable par scoring manuel.
+
+#### Re-scrape massif 12 mai 2026
+Suite à amélioration des keywords (suppression du préfixe "alternance" qui réduisait inutilement les hits car `natureContrat=E1,E2` filtre déjà côté serveur FT) :
+- **France Travail** : `cli.py scrape francetravail --max-pages 15` → 1070 fetched, **799 nouvelles** (271 doublons).
+- **WTTJ** : `cli.py scrape wttj --max-pages 10` → 425 fetched, **162 nouvelles** (263 doublons).
+- **HelloWork** : `cli.py scrape hellowork --max-pages 5` → 115 fetched, **40 nouvelles** (75 doublons).
+- **Total : +1001 nouvelles offres** en une matinée.
+- Scoring : heuristique v2 sur les 1001 → distribution `2 Top, 32 Bon, 125 Moyen, 842 Faible` (v1) puis après pénalités v2 → `0 Top, 9 Bon, 32 Moyen, 960 Faible` (filtre les CDI cachés).
+
+#### Manual rescore du top 17 heuristique
+Re-scoring manuel précis (5 axes /20) pour les 17 offres ≥50 heuristique :
+- **10 vraies alternances** confirmées (Framatome IA CORP nucléaire 66 — meilleur du batch, NEXQT GeoData Scientist 55, EDF Concepteur Dév & IA 51, Brinks Data Engineer 51, Mousquetaires Data Factory ×2 56, etc.)
+- **7 CDI/Senior cachés** descores à Faible 18-30 (Decathlon Data Scientist confirmé, GIO ML confirmé, TRIMANE Chef projet, RSM Data analyst, AKKODIS, ML engineer générique, Archives Luxembourg).
+
+### Distribution finale au 12 mai 2026
+```
+Total actives  : 1543 (+1001 sur la journée)
+🟢 Top (≥80)   :    5  (inchangé — Direct Assurance 84, Malakoff 82+81, MACIF 81, Schneider 80)
+🟡 Bon (60-79) :  167  (+5 net après FT)
+🟠 Moyen       :  306
+⚪ Faible      : 1065
+```
+
+Sources avec offres Bon+ :
+| Source | Total | Bon+ |
+|---|---:|---:|
+| WelcomeToTheJungle | 408 | 85 |
+| Hellowork (toutes) | 217 | 46 |
+| France Travail | 859 | 8 |
+| Indeed | 23 | 14 |
+| Career sites (Schneider/MAIF/MACIF/AXA/BPCE/etc.) | 30 | 14 |
+
+### Added — Scraper France Travail via API officielle v2 (12 mai 2026)
+- **Credentials gitignored** : `FRANCETRAVAIL_CLIENT_ID` / `FRANCETRAVAIL_CLIENT_SECRET` dans `.env` (déjà dans `.gitignore`). Lus via fonction maison (pas de dépendance python-dotenv).
+- **`backend/scrapers/francetravail.py`** : OAuth2 client_credentials avec cache token in-memory (refresh auto avant les 25 min d'expiration). Scope `api_offresdemploiv2 o2dsoffre`. Endpoints :
+  - Token : `https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire`
+  - Search : `https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search` paginé par `range=0-49`
+  - Détail : `https://api.francetravail.io/partenaire/offresdemploi/v2/offres/{id}`
+- **Filtre serveur** : `natureContrat=E1,E2` (apprentissage + professionnalisation), `pays=FR`. Mots-clés via `motsCles`.
+- **Filtre client** : `matches_keywords()` sur titre+description (élimine les faux positifs où FT renvoie un poste pas vraiment IA).
+- **Rate limit** : 8 req/s respectées (plafond user activé = 10 req/s).
+- **Pédagogique** : la création de compte FT côté user nécessite (a) créer l'app, **(b) explicitement souscrire à l'API "Offres d'emploi v2" via le catalogue**. Sans (b), token endpoint renvoie 400 `invalid_client` même si les credentials sont corrects.
+
+### Résultat scrape FT — 12 mai 2026
+- `python cli.py scrape francetravail --max-pages 5` → 57 fetched, **52 nouvelles** insérées (5 doublons).
+- Toutes les 52 ont une description complète **directement dans la réponse search** (entre 449 et 3651 chars) — pas besoin d'appeler `fetch_detail()` séparément.
+- Distribution scoring après applique (52 offres) :
+  ```
+  🟡 Bon (60-79) :  7
+  🟠 Moyen       : 22
+  ⚪ Faible      : 31
+  ```
+- **Top FT** : Boulogne-Billancourt Ad Tech (72, Databricks/Snowflake/Azure pour reco/CV/TimeSeries), ALE Guipavas (64, A.I. Operations GenAI+agents), Dassault Systèmes Versailles (61), Annecy Dev IA (60), Compagnie des Alpes Chambéry (60).
+- Le top global du projet reste inchangé (5 Top ≥80 : Direct Assurance 84, Malakoff Humanis 82+81, MACIF 81, Schneider 80). Aucune offre FT ne perce le top 5 car la majorité des offres "alternance + IA" sur FT sont des postes mixtes (chef de projet, BTS SIO, dev logiciel avec petit volet IA) plutôt que du vrai IA Engineering.
+
+### Distribution globale finale après FT
+```
+Total visibles : 545  (+52 FT, +13 nouveaux scorés)
+🟢 Top (≥80)   :   5
+🟡 Bon (60-79) : 169  (+5 net : 7 FT − 2 déjà existants par dedup)
+🟠 Moyen       : ~275
+⚪ Faible      : ~95
+```
+
+### Added — Scraper WTTJ via API Algolia (12 mai 2026)
+- **`backend/scrapers/wttj.py`** : scraper Welcome To The Jungle via API publique **Algolia**. Clés publiques (App ID `CSEKHVMS53`, search key `4bd8f6215d0cc52b26430765769e65a0`) découvertes via MCP exa (repo `juan-azabal/jobagent`). Index `wttj_jobs_production_fr`. Filtre `(contract_type:apprenticeship OR contract_type:professional_training) AND offices.country_code:FR`.
+- **Résultat E2E** : `python cli.py scrape wttj --max-pages 5` → 257 offres fetched, **242 nouvelles** insérées (15 doublons). Toutes ont description directement via Algolia (pas de fetch_detail séparé).
+- **Scoring batch** : `data/batches/2026-05-12_wttj_242_scores.json` appliqué via `cli.py apply-scores` → 242 offres scorées en un coup. Distribution après scoring :
+  ```
+  🟢 Top (≥80)   :   5  (inchangé, aucune WTTJ ne perce le top 5)
+  🟡 Bon (60-79) : 199  (+82)
+  🟠 Moyen       : 258  (+100)
+  ⚪ Faible      :  70  (+60 — marketing/admin/eng-non-IA filtrés trop largement)
+  ```
+- **Bug fixé pendant le dev WTTJ** : champ Algolia est `offices` (pluriel) pas `office`. Initial test retournait 0 hits avec `office.country_code:FR`. Fix : filtre + `_hit_to_raw` lisent `offices[0]`.
+
+### Added — Cycle de vie des offres : `is_active` + `check-alive` (12 mai 2026)
+- **Migration DB** : ajout colonnes `is_active INTEGER DEFAULT 1` et `last_checked_at TEXT` sur `offers`. Index `idx_offers_is_active`. Migration conditionnelle dans `init_schema()` via `PRAGMA table_info` + `ALTER TABLE`.
+- **`queries.set_alive_state(offer_id, is_active=...)`** : marque l'offre active/archivée et stamp `last_checked_at`.
+- **`queries.list_offers(include_archived=False)`** : par défaut filtre `is_active = 1` (offres archivées masquées de l'UI sauf flag explicite).
+- **`queries.get_stats()`** : KPIs calculés sur offres actives uniquement + champ `archived` séparé.
+- **`backend/scrapers/runner.check_alive(min_score, limit, sleep_between)`** : ping HTTP de chaque URL.
+- **`cli.py check-alive [--min-score N] [--limit N] [--sleep s]`** : commande CLI.
+
+### Added — Détection soft-404 (12 mai 2026, après feedback user)
+**Problème identifié** : le check initial ne testait que le code HTTP. Or beaucoup
+de career sites renvoient **HTTP 200 même quand l'offre est supprimée** : redirect
+silencieux vers la home des offres, SPA qui affiche "n'existe plus" via JS, query
+param `?not_found=true`, title `Erreur - Offre inexistante`, etc.
+
+**Détection à 4 niveaux** dans `_is_soft_404()` :
+1. Body : 18 patterns regex (`n'est plus disponible`, `no longer available`,
+   `perdu cette page`, `résultats de la recherche`, etc.)
+2. Title : 8 patterns (`erreur.*inexistante`, `current openings`, `404`, etc.)
+3. URL finale après redirects : `?not_found=true`, `/404`, `trk=expired_jd_redirect`,
+   ou URL finale < 50% de la longueur originale (= redirigé vers home liste).
+4. Workday-specific : probe direct l'API JSON `wd/cxs/{tenant}/{site}/job/{id}` car
+   les pages Workday sont des SPAs purs (HTML inutile).
+
+**Validation sur 6 URLs confirmées mortes par user** : AXA ✅, Workable HF ✅,
+CEA ✅, Studyrama ✅, Renault Workday ✅ (via API), Nokia ❌ (SPA Phenom People,
+title générique). Soit **5/6 = 83%** d'auto-détection.
+
+**Exécution E2E finale** : `cli.py check-alive` → 472 offres pingées, **39 marquées
+archived** au total :
+- 14 archivées manuellement après confirmation user (HF Workable, JobTeaser AXA,
+  AXA recrutement x3, Argus, BPCE x2, HSBC, Safran, Studyrama, Renault, CEA, Nokia)
+- 13 détectées via HTTP 404/410 (Lever Mistral, BCG X, SG, Bordeaux-Emplois,
+  Engagement-Jeunes Airbus x2, Agefiph, Schneider careers.se.com, Sanofi, LinkedIn obsolète)
+- 11 détectées via soft-404 (LinkedIn redirects, Renault Workday API 404,
+  IDEMIA / Naval Group / CEVA / EPSI / Chanel / Crédit Mutuel Arkéa LinkedIn,
+  Thales x2 expirées, Airbus expirée, Danone, OpenClassrooms x3, etc.)
+
+Distribution finale après cleanup :
+```
+Total visibles : 493  (-39 archived)
+🟢 Top (≥80)   :   5
+🟡 Bon (60-79) : 164
+🟠 Moyen       : 254
+⚪ Faible      :  70
+```
+Top 5 inchangé : Direct Assurance (84), Malakoff Humanis (82, 81), MACIF (81), Schneider Electric (80).
+
+### Fixed — Score Criteo Internship réajusté (12 mai 2026)
+Après récupération de la description complète (via user qui a copié-collé la page),
+**Criteo Machine Learning Engineer Intern** réévalué : titre brut "ML Engineer
+Intern" sans contexte → 74. Avec description : c'est un **stage** (pas alternance),
+focus modélisation pure (multi-task two-tower DL avec PyTorch), peu de MLOps explicite,
+Spark/Ray en "nice to have". Score recalculé : 8+12+17+8+9 = **54 (Moyen)**. La règle
+"alternance uniquement" est respectée — note ajoutée dans `match_reasoning`.
+
 ### Added
 - Setup Claude Code complet : `CLAUDE.md`, `.claude/settings.json`, 6 rules modulaires (`workflow`, `code-style`, `database`, `routes`, `templates`, `scrapers`), 3 sub-agents (`explore-codebase`, `explore-doc`, `web-search`), 4 skills (`apex` multi-step, `one-shot`, `debug`, `review-code`).
 - Mode `bypassPermissions` avec deny list adaptée Windows (Bash + PowerShell).

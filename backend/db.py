@@ -35,9 +35,25 @@ def db():
 
 
 def init_schema() -> None:
-    """Crée les tables si elles n'existent pas. Idempotent."""
+    """Crée les tables si elles n'existent pas. Idempotent.
+
+    Inclut une mini-migration : ajoute les colonnes manquantes AVANT d'exécuter
+    le schéma (les nouveaux index référencent ces colonnes).
+    """
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     with db() as conn:
+        # Étape 1 : migrations conditionnelles si la table existe déjà
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='offers'"
+        ).fetchone()
+        if table_exists:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(offers)").fetchall()}
+            if "is_active" not in cols:
+                conn.execute("ALTER TABLE offers ADD COLUMN is_active INTEGER DEFAULT 1")
+                conn.execute("UPDATE offers SET is_active = 1 WHERE is_active IS NULL")
+            if "last_checked_at" not in cols:
+                conn.execute("ALTER TABLE offers ADD COLUMN last_checked_at TEXT")
+        # Étape 2 : appliquer le schéma complet (CREATE IF NOT EXISTS + indexes)
         conn.executescript(schema)
 
 

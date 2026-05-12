@@ -11,17 +11,55 @@
 <body class="bg-slate-50 text-slate-900 min-h-screen">
     <nav class="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-            <a href="/" class="font-bold text-lg flex items-center gap-2">
-                <span>Scrap'Offre Emploi</span>
-                <span class="text-xs font-normal text-slate-500">Tracker alternance AI Engineer</span>
-            </a>
+            <div class="flex items-center gap-6">
+                <a href="/" class="font-bold text-lg flex items-center gap-2">
+                    <span>Scrap'Offre Emploi</span>
+                    <span class="text-xs font-normal text-slate-500">Tracker alternance AI Engineer</span>
+                </a>
+                <div class="flex items-center gap-1 text-sm">
+                    <a href="/" class="px-3 py-1.5 rounded {% if page == 'offers' or page == 'offer_detail' %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+                        Offres
+                    </a>
+                    <a href="/companies" class="px-3 py-1.5 rounded {% if page == 'companies' or page == 'company_detail' %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+                        Entreprises
+                    </a>
+                </div>
+            </div>
             <div class="flex items-center gap-3">
-                <button type="button"
-                        class="px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded font-medium opacity-50 cursor-not-allowed"
-                        title="A venir : scrape via UI"
-                        disabled>
-                    Scraper (bientôt)
-                </button>
+                <!-- Bouton Scraper : ouvre un panneau via HTMX -->
+                <details class="relative">
+                    <summary class="px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded font-medium cursor-pointer list-none">
+                        Scraper
+                    </summary>
+                    <div class="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded shadow-lg p-4 z-20">
+                        <form hx-post="/api/scrape"
+                              hx-trigger="submit"
+                              hx-target="#scrape-status"
+                              hx-swap="innerHTML"
+                              class="space-y-3">
+                            <div>
+                                <label class="block text-xs text-slate-500 mb-1">Source</label>
+                                <select name="source" class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm">
+                                    <option value="hellowork">HelloWork</option>
+                                    <option value="francetravail">France Travail (API)</option>
+                                    <option value="wttj">Welcome to the Jungle</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-500 mb-1">Pages max / mot-clé</label>
+                                <input type="number" name="max_pages" value="5" min="1" max="30"
+                                       class="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />
+                            </div>
+                            <button type="submit" class="w-full px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium">
+                                Lancer
+                            </button>
+                        </form>
+                        <div id="scrape-status" class="mt-3 text-xs"
+                             hx-get="/api/scrape/status"
+                             hx-trigger="load, every 3s"
+                             hx-swap="innerHTML"></div>
+                    </div>
+                </details>
             </div>
         </div>
     </nav>
@@ -29,5 +67,31 @@
     <main class="max-w-7xl mx-auto px-4 py-6">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Petite JS pour formater le statut JSON de scrape -->
+    <script>
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            const target = evt.detail.target;
+            if (target && target.id === 'scrape-status' && evt.detail.xhr) {
+                try {
+                    const json = JSON.parse(evt.detail.xhr.responseText);
+                    let html = '';
+                    if (json.running) {
+                        html = '<div class="text-amber-700">⏳ Scrape en cours (' + (json.source || '') + ')…</div>';
+                    } else if (json.finished_at) {
+                        if (json.error) {
+                            html = '<div class="text-rose-700">❌ Erreur : ' + json.error + '</div>';
+                        } else {
+                            html = '<div class="text-emerald-700">✅ Terminé (' + (json.source || '') + ')</div>';
+                            html += '<div class="text-slate-600">Fetched : ' + json.total_fetched + ' / Nouvelles : ' + json.total_new + ' / Doublons : ' + json.total_duplicates + '</div>';
+                        }
+                    } else {
+                        html = '<div class="text-slate-400">Aucun scrape lancé pour le moment.</div>';
+                    }
+                    target.innerHTML = html;
+                } catch (e) { /* leave as is */ }
+            }
+        });
+    </script>
 </body>
 </html>

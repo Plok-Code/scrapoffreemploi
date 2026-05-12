@@ -28,12 +28,20 @@ def list_offers(
     source: str = "",
     min_score: int | None = None,
     only_to_apply: bool = False,
+    include_archived: bool = False,
     sort: str = "score_desc",
     limit: int = 500,
 ) -> list[dict]:
-    """Liste filtrée des offres. Filtres optionnels."""
+    """Liste filtrée des offres. Filtres optionnels.
+
+    Par défaut exclut les offres archivées (is_active = 0). Passer
+    include_archived=True pour les inclure.
+    """
     where = []
     params: list[Any] = []
+
+    if not include_archived:
+        where.append("(is_active IS NULL OR is_active = 1)")
 
     if search:
         where.append("(LOWER(title) LIKE ? OR LOWER(company) LIKE ? OR LOWER(city) LIKE ?)")
@@ -95,19 +103,33 @@ def list_distinct_statuses() -> list[str]:
 
 
 def get_stats() -> dict:
-    """KPIs pour la barre de stats en haut de page."""
+    """KPIs pour la barre de stats en haut de page (offres actives uniquement)."""
+    active_clause = "(is_active IS NULL OR is_active = 1)"
     with db() as conn:
         cur = conn.cursor()
-        total = cur.execute("SELECT COUNT(*) FROM offers").fetchone()[0]
-        to_apply = cur.execute("SELECT COUNT(*) FROM offers WHERE status IS NULL").fetchone()[0]
-        applied = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Postulé'").fetchone()[0]
-        interviews = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Entretien'").fetchone()[0]
-        refused = cur.execute("SELECT COUNT(*) FROM offers WHERE status = 'Refusé'").fetchone()[0]
-        top_fit = cur.execute("SELECT COUNT(*) FROM offers WHERE match_score >= 80").fetchone()[0]
-        bon_fit = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80"
+        total = cur.execute(f"SELECT COUNT(*) FROM offers WHERE {active_clause}").fetchone()[0]
+        to_apply = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE status IS NULL AND {active_clause}"
         ).fetchone()[0]
-        unscored = cur.execute("SELECT COUNT(*) FROM offers WHERE match_score IS NULL").fetchone()[0]
+        applied = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE status = 'Postulé' AND {active_clause}"
+        ).fetchone()[0]
+        interviews = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE status = 'Entretien' AND {active_clause}"
+        ).fetchone()[0]
+        refused = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE status = 'Refusé' AND {active_clause}"
+        ).fetchone()[0]
+        top_fit = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE match_score >= 80 AND {active_clause}"
+        ).fetchone()[0]
+        bon_fit = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80 AND {active_clause}"
+        ).fetchone()[0]
+        unscored = cur.execute(
+            f"SELECT COUNT(*) FROM offers WHERE match_score IS NULL AND {active_clause}"
+        ).fetchone()[0]
+        archived = cur.execute("SELECT COUNT(*) FROM offers WHERE is_active = 0").fetchone()[0]
     return {
         "total": total,
         "to_apply": to_apply,
@@ -117,6 +139,7 @@ def get_stats() -> dict:
         "top_fit": top_fit,
         "bon_fit": bon_fit,
         "unscored": unscored,
+        "archived": archived,
     }
 
 
@@ -134,6 +157,20 @@ def update_description(offer_id: int, description: str) -> bool:
         cur = conn.execute(
             "UPDATE offers SET description = :desc WHERE id = :id",
             {"desc": description, "id": offer_id},
+        )
+        return cur.rowcount > 0
+
+
+def set_alive_state(offer_id: int, *, is_active: bool) -> bool:
+    """Marque l'offre active (1) ou archivée (0) et stamp last_checked_at."""
+    with db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE offers
+            SET is_active = :state, last_checked_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            """,
+            {"state": 1 if is_active else 0, "id": offer_id},
         )
         return cur.rowcount > 0
 
@@ -232,6 +269,122 @@ def update_offer(offer_id: int, fields: dict[str, Any]) -> bool:
     with db() as conn:
         cur = conn.execute(sql, clean)
         return cur.rowcount > 0
+
+
+# ---------- Target companies (phase 2 — candidature spontanée) ----------
+
+ALLOWED_COMPANY_UPDATE_FIELDS = {
+    "status", "date_contacted", "date_followup", "notes", "feedback", "priority",
+}
+
+
+def list_target_companies(
+    *,
+    search: str = "",
+    priority: str = "",
+    status: str = "",
+    sort: str = "priority",
+    limit: int = 200,
+) -> list[dict]:
+    """Liste filtrée des entreprises cibles (candidature spontanée)."""
+    where = []
+    params: list[Any] = []
+
+    if search:
+        where.append("(LOWER(name) LIKE ? OR LOWER(sector) LIKE ?)")
+        s = f"%{search.lower()}%"
+        params.extend([s, s])
+    if priority:
+        where.append("priority = ?")
+        params.append(priority)
+    if status:
+        if status == "_NONE_":
+            where.append("status IS NULL")
+        else:
+            where.append("status = ?")
+            params.append(status)
+
+    sql = "SELECT * FROM target_companies"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    sort_clauses = {
+        "priority": (
+            "CASE priority WHEN 'Haute' THEN 1 WHEN 'Moyenne' THEN 2 "
+            "WHEN 'Basse' THEN 3 ELSE 4 END ASC, LOWER(name) ASC"
+        ),
+        "name": "LOWER(name) ASC",
+        "sector": "LOWER(sector) ASC NULLS LAST, LOWER(name) ASC",
+        "recent": "updated_at DESC",
+    }
+    sql += " ORDER BY " + sort_clauses.get(sort, sort_clauses["priority"])
+    sql += f" LIMIT {int(limit)}"
+
+    with db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_target_company(company_id: int) -> Optional[dict]:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM target_companies WHERE id = ?", (company_id,)
+        ).fetchone()
+    return _row_to_dict(row)
+
+
+def update_target_company(company_id: int, fields: dict[str, Any]) -> bool:
+    clean = {
+        k: (v if v not in ("", None) else None)
+        for k, v in fields.items()
+        if k in ALLOWED_COMPANY_UPDATE_FIELDS
+    }
+    if not clean:
+        return False
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
+    sql = f"UPDATE target_companies SET {set_clause} WHERE id = :id"
+    clean["id"] = company_id
+    with db() as conn:
+        cur = conn.execute(sql, clean)
+        return cur.rowcount > 0
+
+
+def list_company_priorities() -> list[str]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT priority FROM target_companies WHERE priority IS NOT NULL AND priority != '' ORDER BY priority"
+        ).fetchall()
+    return [r["priority"] for r in rows]
+
+
+def get_company_stats() -> dict:
+    """KPIs pour la page Entreprises."""
+    with db() as conn:
+        cur = conn.cursor()
+        total = cur.execute("SELECT COUNT(*) FROM target_companies").fetchone()[0]
+        to_contact = cur.execute(
+            "SELECT COUNT(*) FROM target_companies WHERE status IS NULL"
+        ).fetchone()[0]
+        contacted = cur.execute(
+            "SELECT COUNT(*) FROM target_companies WHERE status = 'Contacté'"
+        ).fetchone()[0]
+        interviews = cur.execute(
+            "SELECT COUNT(*) FROM target_companies WHERE status = 'Entretien'"
+        ).fetchone()[0]
+        refused = cur.execute(
+            "SELECT COUNT(*) FROM target_companies WHERE status = 'Refusé'"
+        ).fetchone()[0]
+        haute = cur.execute(
+            "SELECT COUNT(*) FROM target_companies WHERE priority = 'Haute'"
+        ).fetchone()[0]
+    return {
+        "total": total,
+        "to_contact": to_contact,
+        "contacted": contacted,
+        "interviews": interviews,
+        "refused": refused,
+        "haute": haute,
+    }
 
 
 def apply_llm_scores(scores: list[dict]) -> int:

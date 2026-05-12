@@ -101,6 +101,25 @@ def cmd_enrich(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_alive(args: argparse.Namespace) -> int:
+    from backend.scrapers.runner import check_alive
+    print(
+        f"Vérification des URLs (min_score={args.min_score or 'aucun'}, "
+        f"limit={args.limit or 'none'})..."
+    )
+    result = check_alive(
+        min_score=args.min_score,
+        limit=args.limit,
+        sleep_between=args.sleep,
+    )
+    print(f"  Vérifiées             : {result.total_checked}")
+    print(f"  Toujours en ligne     : {result.still_alive}")
+    print(f"  Archivées HTTP 404/410: {result.archived_http}")
+    print(f"  Archivées soft-404    : {result.archived_soft}  (HTTP 200 mais 'offre supprimée')")
+    print(f"  Non concluant         : {result.inconclusive}  (403 anti-bot / timeout)")
+    return 0
+
+
 def cmd_list_batches(_args: argparse.Namespace) -> int:
     batches = matching.list_batches()
     score_files = matching.list_score_files()
@@ -173,6 +192,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich.add_argument("--limit", type=int, default=None, help="Nombre max d'offres à enrichir.")
     p_enrich.add_argument("--sleep", type=float, default=1.0, help="Pause entre 2 requêtes (sec).")
     p_enrich.set_defaults(func=cmd_enrich)
+
+    # check-alive
+    p_alive = sub.add_parser(
+        "check-alive",
+        help="Ping chaque URL et marque archivées (is_active=0) les 404/410.",
+    )
+    p_alive.add_argument("--min-score", type=int, default=None, help="Ne checker que les offres avec score >= N.")
+    p_alive.add_argument("--limit", type=int, default=None, help="Max d'offres à pinguer.")
+    p_alive.add_argument("--sleep", type=float, default=0.8, help="Pause entre 2 requêtes (sec).")
+    p_alive.set_defaults(func=cmd_check_alive)
 
     # list-batches
     p_list = sub.add_parser("list-batches", help="Liste les batches générés et les scores reçus.")

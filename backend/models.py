@@ -26,6 +26,17 @@ Status = Literal[
 VALID_PRIORITIES = ("Haute", "Moyenne", "Basse")
 Priority = Literal["Haute", "Moyenne", "Basse"]
 
+# Statuts pour les entreprises cibles (candidature spontanée) — distincts de VALID_STATUSES
+# qui concerne les offres. Pour les entreprises, pas d'étape "Postulé" formelle.
+VALID_COMPANY_STATUSES = (
+    "Contacté",
+    "Relancé",
+    "Entretien",
+    "Refusé",
+    "Sans réponse",
+    "Abandonné",
+)
+
 VALID_REMOTE = ("Oui", "Non", "Hybride")
 Remote = Literal["Oui", "Non", "Hybride"]
 

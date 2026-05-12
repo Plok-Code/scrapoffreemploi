@@ -102,6 +102,11 @@
         <input type="number" name="min_score" value="{{ filters.min_score or '' }}" min="0" max="100" step="5"
                class="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
     </div>
+    <label class="flex items-center gap-1.5 text-xs text-slate-600 pb-1.5">
+        <input type="checkbox" name="include_archived" value="1" {% if filters.include_archived %}checked{% endif %}
+               class="rounded border-slate-300" />
+        Inclure archivées
+    </label>
     <div>
         <label class="block text-xs text-slate-500 mb-1">Trier par</label>
         <select name="sort" class="px-2 py-1.5 border border-slate-300 rounded text-sm">
