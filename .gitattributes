@@ -1,0 +1,30 @@
+# Force traitement binaire pour les bundles JS/CSS minifiés et autres assets.
+# Sinon la conversion LF<->CRLF de git sur Windows corrompt les fichiers,
+# casse le SRI (sha384 integrity) et empêche le navigateur de charger le script.
+*.min.js binary
+*.min.css binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.xlsx binary
+*.xls binary
+*.docx binary
+*.pptx binary
+
+# Fichiers texte qui DOIVENT garder leur LF (pas de conversion automatique)
+*.py text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
