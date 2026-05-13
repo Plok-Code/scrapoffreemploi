@@ -6,6 +6,75 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint qualité (14 mai 2026) : audit GPT — Vague 4 (CHECK constraints DB)
+
+Le point « contraintes DB faibles » de l'audit GPT est traité : les enums
+(`status`, `priority`, `remote`, `match_label`) et les bornes numériques
+(`match_score ∈ [0,100]`, `score_* ∈ [0,20]`, `is_active ∈ {0,1}`) sont
+maintenant **enforced côté SQLite** via `CHECK` constraints. Un script
+seed/migration ou un futur scraper buggué ne peut plus polluer la DB avec
+des valeurs hors-grille — l'INSERT est rejeté avec `CHECK constraint failed`
+avant que la donnée touche la table.
+
+Validation côté Python (Pydantic models + `_validate_enum`) restait en
+place — c'est de la défense en profondeur : 2 lignes contre les valeurs
+invalides.
+
+#### Migration 002 (recréation de table)
+
+- **`backend/migrations/002_check_constraints.sql`** : SQLite ne supporte
+  pas `ALTER TABLE ADD CONSTRAINT`, donc la migration recrée `offers` et
+  `target_companies` avec les CHECK, copie les données via
+  `INSERT INTO ... SELECT` (colonnes nommées explicitement), drop l'ancienne,
+  rename la nouvelle, recrée les 7 indexes sur `offers` + 4 sur
+  `target_companies` + les 2 triggers `updated_at`.
+- **Pré-validation des données** : audit avant migration a confirmé que
+  toutes les valeurs existantes (1189 offers, ~250 target_companies)
+  respectent les contraintes envisagées — la migration s'applique sans
+  rollback.
+- **Synchro avec `models.py`** : les listes énumérées dans les CHECK
+  reflètent exactement `VALID_STATUSES`, `VALID_PRIORITIES`, `VALID_REMOTE`,
+  `MATCH_LABELS`, `VALID_COMPANY_STATUSES`. Commentaire en tête du fichier
+  documente la règle "modif d'un VALID_* → nouvelle migration 00X".
+
+#### CHECK constraints appliquées
+
+Sur `offers` :
+- `remote` ∈ {NULL, 'Oui', 'Non', 'Hybride'}
+- `match_label` ∈ {NULL, 'Top', 'Bon', 'Moyen', 'Faible'}
+- `status` ∈ {NULL, Postulé, Relancé, Entretien, Test technique, Refusé,
+  Accepté, Sans réponse, Abandonné, Pas intéressé}
+- `priority` ∈ {NULL, 'Haute', 'Moyenne', 'Basse'}
+- `match_score` ∈ [0, 100] (ou NULL)
+- `score_pipeline / exploration / modelisation / deploiement / cadrage`
+  ∈ [0, 20] (ou NULL)
+- `is_active` ∈ {0, 1}
+
+Sur `target_companies` :
+- `priority` ∈ {NULL, 'Haute', 'Moyenne', 'Basse'}
+- `status` ∈ {NULL, Contacté, Relancé, Entretien, Refusé, Sans réponse,
+  Abandonné} (≠ VALID_STATUSES des offers — `Postulé` n'est pas valable
+  pour une entreprise cible).
+
+#### Tests
+
+- **`tests/test_check_constraints.py`** : 112 cas parametrisés, ~12s.
+  Couvre pour chaque colonne contrainte : valeurs valides acceptées (dont
+  NULL), valeurs invalides rejetées avec `sqlite3.IntegrityError`
+  ("CHECK constraint failed: ..."). Inclut le bypass via `sqlite3` direct
+  pour valider que la défense agit au niveau **DB** (pas seulement Python).
+  Tests de non-régression sur `queries.insert_offer` / `update_offer` pour
+  s'assurer que le filet ne casse pas les flux légitimes.
+
+#### Validation E2E
+
+- Migration v2 appliquée sur la DB du user (1189 offers + ~250 companies)
+  en ~0.5s, aucune donnée perdue, tous les indexes et triggers recréés.
+- `pytest tests/ -q` : **256 passed in ~19s** (144 → 256, +112 tests
+  CHECK constraints).
+- `bandit -r backend cli.py` : **0 issues** (stdout, exit 0).
+- Smoke test : 18 routes OK, `schema_version=2`, stats total=1189.
+
 ### Added — Sprint qualité (14 mai 2026) : audit GPT — Vague 3 (migrations versionnées)
 
 Le point « migrations trop artisanales » de l'audit GPT est traité : on
