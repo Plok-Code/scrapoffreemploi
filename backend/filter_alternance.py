@@ -6,8 +6,9 @@ Règle métier :
 - En cas de doute (pas d'indicateur explicite) → garde (principe : on garde sauf si on est sûr de rejeter)
 
 Pour les offres rejetées :
-- status NULL → DELETE (cohérent avec la règle URL morte + sans statut)
-- status NOT NULL → is_active=0 (préserve l'historique applicatif)
+- par défaut → is_active=0 (préserve l'historique et évite les pertes locales)
+- optionnellement, `hard_delete_unstatused=True` permet une purge des offres
+  sans statut si l'utilisateur la demande explicitement
 
 Idempotent : peut être relancé à chaque scrape.
 """
@@ -108,11 +109,17 @@ def classify_offer(title: str | None, description: str | None,
     return "doubt", "pas d'indicateur explicite"
 
 
-def filter_non_alternance_offers(*, dry_run: bool = False) -> dict:
+def filter_non_alternance_offers(
+    *,
+    dry_run: bool = False,
+    hard_delete_unstatused: bool = False,
+) -> dict:
     """Parcourt toutes les offres actives, supprime/archive les non-alternance.
 
     Args:
         dry_run: si True, ne touche pas la DB mais retourne les stats.
+        hard_delete_unstatused: si True, supprime les rejets sans statut.
+            Par défaut False : archive tout, plus sûr pour une app personnelle.
     """
     with db() as conn:
         rows = conn.execute(
@@ -146,25 +153,26 @@ def filter_non_alternance_offers(*, dry_run: bool = False) -> dict:
             continue
         # verdict == "reject"
         has_status = bool(off["status"])
+        should_delete = hard_delete_unstatused and not has_status
         if not dry_run:
-            if has_status:
-                queries.set_alive_state(off["id"], is_active=False)
-                stats["reject_archived"] += 1
-            else:
+            if should_delete:
                 queries.delete_offer(off["id"])
                 stats["reject_deleted"] += 1
-        else:
-            if has_status:
-                stats["reject_archived"] += 1
             else:
+                queries.set_alive_state(off["id"], is_active=False)
+                stats["reject_archived"] += 1
+        else:
+            if should_delete:
                 stats["reject_deleted"] += 1
+            else:
+                stats["reject_archived"] += 1
         if len(stats["examples_rejected"]) < 10:
             title_short = (off["title"] or "")[:60]
             stats["examples_rejected"].append({
                 "id": off["id"],
                 "title": title_short,
                 "reason": reason,
-                "deleted": not has_status,
+                "deleted": should_delete,
             })
 
     logger.info(

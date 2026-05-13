@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from math import ceil
 from pathlib import Path
+from threading import Lock
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -146,7 +148,19 @@ def page_offers(
     only_to_apply: bool = False,
     include_archived: bool = False,
     sort: str = "score_desc",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=25, le=500),
 ):
+    total_offers = queries.count_offers(
+        search=search,
+        status=status,
+        source=source,
+        min_score=min_score,
+        only_to_apply=only_to_apply,
+        include_archived=include_archived,
+    )
+    total_pages = max(1, ceil(total_offers / per_page))
+    page = min(page, total_pages)
     offers = queries.list_offers(
         search=search,
         status=status,
@@ -155,6 +169,8 @@ def page_offers(
         only_to_apply=only_to_apply,
         include_archived=include_archived,
         sort=sort,
+        limit=per_page,
+        offset=(page - 1) * per_page,
     )
     stats = queries.get_stats()
     sources = queries.list_sources()
@@ -162,6 +178,7 @@ def page_offers(
         request,
         "offers.html",
         {
+            "request": request,
             "offers": offers,
             "stats": stats,
             "sources": sources,
@@ -174,6 +191,14 @@ def page_offers(
                 "only_to_apply": only_to_apply,
                 "include_archived": include_archived,
                 "sort": sort,
+            },
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_offers,
+                "total_pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
             },
             "page": "offers",
         },
@@ -242,10 +267,19 @@ def page_companies(
     city: str = "",
     other_haute: bool = False,
     sort: str = "priority",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=25, le=500),
 ):
+    total_companies = queries.count_target_companies(
+        search=search, priority=priority, status=status,
+        city=city, other_haute=other_haute,
+    )
+    total_pages = max(1, ceil(total_companies / per_page))
+    page = min(page, total_pages)
     companies = queries.list_target_companies(
         search=search, priority=priority, status=status,
         city=city, other_haute=other_haute, sort=sort,
+        limit=per_page, offset=(page - 1) * per_page,
     )
     stats = queries.get_company_stats()
     priorities = queries.list_company_priorities()
@@ -256,6 +290,7 @@ def page_companies(
         request,
         "companies.html",
         {
+            "request": request,
             "companies": companies,
             "stats": stats,
             "priorities": priorities,
@@ -270,6 +305,14 @@ def page_companies(
                 "city": city,
                 "other_haute": other_haute,
                 "sort": sort,
+            },
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_companies,
+                "total_pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
             },
             "page": "companies",
         },
@@ -368,6 +411,34 @@ _SCRAPE_STATE: dict = {
     "total_duplicates": 0,
     "error": None,
 }
+_SCRAPE_STATE_LOCK = Lock()
+
+
+def _queue_scrape_or_409(source_label: str) -> None:
+    """Marque un scrape comme réservé avant que BackgroundTasks ne démarre.
+
+    Sans cette réservation synchrone, deux POST très proches peuvent tous les deux
+    voir `running=False` avant que la tâche background ne pose `running=True`.
+    """
+    from datetime import datetime
+
+    with _SCRAPE_STATE_LOCK:
+        if _SCRAPE_STATE["running"]:
+            raise HTTPException(409, f"Un scrape '{_SCRAPE_STATE.get('source')}' est déjà en cours.")
+        _SCRAPE_STATE.update({
+            "running": True,
+            "source": source_label,
+            "step": "queued",
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "finished_at": None,
+            "total_fetched": 0,
+            "total_new": 0,
+            "total_duplicates": 0,
+            "deleted_dead": 0,
+            "archived_dead": 0,
+            "scoring_applied": 0,
+            "error": None,
+        })
 
 
 def _run_scrape_bg(source: str, max_pages: int) -> None:
@@ -408,11 +479,11 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
     """Tâche d'arrière-plan : scrape complet + cleanup + filtre + scoring auto.
 
     Étapes :
-    1. Cleanup URLs existantes (404 → delete sans-statut, archive avec statut)
+    1. Cleanup URLs existantes (404/soft-404 → archive)
     2. Job boards : FT + WTTJ + HelloWork (séquentiel, dédup auto)
     3. Portails entreprises : Workable/Lever/Workday/Greenhouse + best-effort
        (+ Playwright si use_playwright=True, sur les SPAs sans API)
-    4. Filtre non-alternance (CDI/Senior/stage seul → delete/archive)
+    4. Filtre non-alternance (CDI/Senior/stage seul → archive)
     5. Heuristic scoring auto sur les nouvelles offres
     """
     from datetime import datetime
@@ -490,16 +561,16 @@ def api_scrape(
     """
     from backend.scrapers.registry import list_scrapers
 
-    if _SCRAPE_STATE["running"]:
-        raise HTTPException(409, f"Un scrape '{_SCRAPE_STATE.get('source')}' est déjà en cours.")
-
     if source.lower() == "all":
+        label = "ALL (FT+WTTJ+HW+portails)" + (" + Playwright" if use_playwright else "")
+        _queue_scrape_or_409(label)
         bg.add_task(_run_full_scrape_bg, max_pages, use_playwright)
         return {"ok": True, "source": "ALL", "max_pages": max_pages, "playwright": use_playwright}
 
     available = set(list_scrapers())
     if source not in available:
         raise HTTPException(400, f"Source inconnue : {source}. Dispo : {sorted(available)}")
+    _queue_scrape_or_409(source)
     bg.add_task(_run_scrape_bg, source, max_pages)
     return {"ok": True, "source": source, "max_pages": max_pages}
 
@@ -518,10 +589,11 @@ def api_scrape_reset():
     est resté à True. Le boot reset auto déjà au démarrage, mais cette route
     permet de forcer sans redémarrer le serveur.
     """
-    was_running = _SCRAPE_STATE.get("running", False)
-    _SCRAPE_STATE["running"] = False
-    _SCRAPE_STATE["step"] = "reset (manual)"
-    _SCRAPE_STATE["error"] = "Reset manuel par utilisateur"
+    with _SCRAPE_STATE_LOCK:
+        was_running = _SCRAPE_STATE.get("running", False)
+        _SCRAPE_STATE["running"] = False
+        _SCRAPE_STATE["step"] = "reset (manual)"
+        _SCRAPE_STATE["error"] = "Reset manuel par utilisateur"
     logger.warning("Reset manuel de _SCRAPE_STATE (was_running={r})", r=was_running)
     return {"ok": True, "was_running": was_running}
 

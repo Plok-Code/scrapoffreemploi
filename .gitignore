@@ -1,22 +1,104 @@
-# Données vivantes
+# ============================================================
+# DONNÉES PERSO — ne JAMAIS commit (jamais, point)
+# ============================================================
+
+# CV, lettres, mails de candidature, notes perso
+# (le PDF du programme OC dans reference/ reste tracké : c'est public)
+*CV*.pdf
+*Cv*.pdf
+*cv*.pdf
+*CV*.docx
+*cv*.docx
+*Lettre*.pdf
+*lettre*.pdf
+*lettre*.docx
+*Mail*.pdf
+*mail*.pdf
+*candidature*.pdf
+*candidature*.docx
+*motivation*.pdf
+*motivation*.docx
+# PDF/docx en root spécifiquement (les seuls PDF légitimes sont dans reference/)
+/*.pdf
+/*.docx
+/*.doc
+
+# Notes / brouillons / scratch perso
+NOTES.md
+notes.md
+TODO.md
+todo.md
+scratch.md
+SCRATCH.md
+*_perso.md
+*_perso.txt
+
+# Exports / batches xlsx perso (le source xlsx historique est dans data/ déjà gitignored)
+*.xlsx
+!docs/**/*.xlsx
+!reference/**/*.xlsx
+
+# Données vivantes (DB SQLite + logs + backups + scrapes + batches + profile Playwright)
 data/
 
-# Python
+# ============================================================
+# CREDENTIALS / SECRETS
+# ============================================================
+.env
+.env.local
+.env.*.local
+.envrc
+*.pem
+*.key
+*credentials*.json
+*secrets*.json
+.mcp.local.json
+service-account*.json
+
+# ============================================================
+# PYTHON
+# ============================================================
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .venv/
 venv/
+env/
+ENV/
+.python-version
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+build/
+dist/
+.tox/
+.nox/
+__pypackages__/
 
-# Editeurs
+# ============================================================
+# ÉDITEURS / IDE
+# ============================================================
 .idea/
 .vscode/
+.cursor/
 *.swp
+*.swo
+*~
+*.bak
+*.orig
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Claude Code
+# ============================================================
+# CLAUDE CODE
+# ============================================================
 .claude/settings.local.json
 .claude/sessions/
 .claude/cache/
@@ -27,10 +109,7 @@ Thumbs.db
 .claude/tmp/
 .claude/spawn-tasks/
 
-# MCP credentials (si .mcp.json un jour avec secrets)
-.mcp.local.json
-.env
-.env.local
-
-# Legacy : ancien code + JSON scraps anciens (peut contenir des données de candidatures perso)
+# ============================================================
+# LEGACY (peut contenir des données de candidatures perso)
+# ============================================================
 legacy/

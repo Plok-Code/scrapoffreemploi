@@ -22,7 +22,7 @@ python -m backend.migrate_xlsx
 
 ```
 backend/    Code FastAPI + Jinja + SQLite
-cli.py      Commandes : scrape, score-apply, export
+cli.py      Commandes : scrape, apply-scores, export-batch
 data/       SQLite + batches JSON + scrapes (gitignored)
 docs/       ARCHITECTURE.md, CRITERIA.md
 reference/  PDF du programme OC + pages PNG

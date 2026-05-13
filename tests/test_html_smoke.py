@@ -38,6 +38,24 @@ class TestPageOffers:
         r = client.get("/?include_archived=true")
         assert r.status_code == 200
 
+    def test_get_root_pagination_shows_total(self, client):
+        from backend.db import db as _db
+
+        with _db() as conn:
+            conn.executemany(
+                "INSERT INTO offers (title, company, city, dedup_key) VALUES (?, ?, ?, ?)",
+                [
+                    (f"Job {i}", "Acme", "Paris", f"job{i}|acme|paris")
+                    for i in range(1, 27)
+                ],
+            )
+
+        r = client.get("/?per_page=25")
+
+        assert r.status_code == 200
+        assert "26 offres au total" in r.text
+        assert "page 1/2" in r.text
+
 
 class TestPageCompanies:
     def test_get_companies(self, client):

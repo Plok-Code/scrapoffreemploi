@@ -108,3 +108,14 @@ class TestListPendingApplied:
 
         # Seul b2 est pending (b1 est applied car id 1 a match_score=75)
         assert latest_pending_batch() == b2
+
+
+class TestExportBatch:
+    def test_export_specific_offer_ids_only(self, temp_db_with_offers, temp_batches_dir):
+        from backend.matching import export_batch_to_score
+
+        path = export_batch_to_score(offer_ids=[1, 3])
+        raw = json.loads(path.read_text(encoding="utf-8"))
+
+        assert raw["count"] == 2
+        assert [offer["id"] for offer in raw["offers"]] == [1, 3]

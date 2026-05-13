@@ -21,7 +21,7 @@ def get_offer(offer_id: int) -> Optional[dict]:
     return _row_to_dict(row)
 
 
-def list_offers(
+def _offer_filters(
     *,
     search: str = "",
     status: str = "",
@@ -29,14 +29,7 @@ def list_offers(
     min_score: int | None = None,
     only_to_apply: bool = False,
     include_archived: bool = False,
-    sort: str = "score_desc",
-    limit: int = 500,
-) -> list[dict]:
-    """Liste filtrée des offres. Filtres optionnels.
-
-    Par défaut exclut les offres archivées (is_active = 0). Passer
-    include_archived=True pour les inclure.
-    """
+) -> tuple[list[str], list[Any]]:
     where = []
     params: list[Any] = []
 
@@ -66,6 +59,60 @@ def list_offers(
     if only_to_apply:
         where.append("status IS NULL")
 
+    return where, params
+
+
+def count_offers(
+    *,
+    search: str = "",
+    status: str = "",
+    source: str = "",
+    min_score: int | None = None,
+    only_to_apply: bool = False,
+    include_archived: bool = False,
+) -> int:
+    """Compte les offres correspondant aux filtres UI."""
+    where, params = _offer_filters(
+        search=search,
+        status=status,
+        source=source,
+        min_score=min_score,
+        only_to_apply=only_to_apply,
+        include_archived=include_archived,
+    )
+    sql = "SELECT COUNT(*) AS n FROM offers"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    with db() as conn:
+        return int(conn.execute(sql, params).fetchone()["n"])
+
+
+def list_offers(
+    *,
+    search: str = "",
+    status: str = "",
+    source: str = "",
+    min_score: int | None = None,
+    only_to_apply: bool = False,
+    include_archived: bool = False,
+    sort: str = "score_desc",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Liste filtrée des offres. Filtres optionnels.
+
+    Par défaut exclut les offres archivées (is_active = 0). Passer
+    include_archived=True pour les inclure.
+    """
+    where, params = _offer_filters(
+        search=search,
+        status=status,
+        source=source,
+        min_score=min_score,
+        only_to_apply=only_to_apply,
+        include_archived=include_archived,
+    )
+
     sql = "SELECT * FROM offers"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -79,7 +126,8 @@ def list_offers(
         "title": "LOWER(title) ASC NULLS LAST",
     }
     sql += " ORDER BY " + sort_clauses.get(sort, sort_clauses["score_desc"])
-    sql += f" LIMIT {int(limit)}"
+    sql += " LIMIT ? OFFSET ?"
+    params.extend([max(1, int(limit)), max(0, int(offset))])
 
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
@@ -406,25 +454,14 @@ ALLOWED_COMPANY_UPDATE_FIELDS = {
 }
 
 
-def list_target_companies(
+def _target_company_filters(
     *,
     search: str = "",
     priority: str = "",
     status: str = "",
     city: str = "",
     other_haute: bool = False,
-    sort: str = "priority",
-    limit: int = 500,
-) -> list[dict]:
-    """Liste filtrée des entreprises cibles (candidature spontanée).
-
-    Le filtre `city` accepte une sous-chaîne (LIKE) — utile pour matcher
-    "Toulouse" ou "31 - Toulouse" etc.
-
-    `other_haute=True` : tab spécial = entreprises priorité Haute dans les villes
-    hors les 5 cibles (Toulouse/Bordeaux/Pau/Paris/Nancy). Permet de voir les
-    pépites Haute partout en France.
-    """
+) -> tuple[list[str], list[Any]]:
     where = []
     params: list[Any] = []
 
@@ -450,6 +487,60 @@ def list_target_companies(
             where.append("LOWER(COALESCE(city, '')) NOT LIKE ?")
             params.append(f"%{p.lower()}%")
 
+    return where, params
+
+
+def count_target_companies(
+    *,
+    search: str = "",
+    priority: str = "",
+    status: str = "",
+    city: str = "",
+    other_haute: bool = False,
+) -> int:
+    """Compte les entreprises cibles correspondant aux filtres UI."""
+    where, params = _target_company_filters(
+        search=search,
+        priority=priority,
+        status=status,
+        city=city,
+        other_haute=other_haute,
+    )
+    sql = "SELECT COUNT(*) AS n FROM target_companies"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    with db() as conn:
+        return int(conn.execute(sql, params).fetchone()["n"])
+
+
+def list_target_companies(
+    *,
+    search: str = "",
+    priority: str = "",
+    status: str = "",
+    city: str = "",
+    other_haute: bool = False,
+    sort: str = "priority",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Liste filtrée des entreprises cibles (candidature spontanée).
+
+    Le filtre `city` accepte une sous-chaîne (LIKE) — utile pour matcher
+    "Toulouse" ou "31 - Toulouse" etc.
+
+    `other_haute=True` : tab spécial = entreprises priorité Haute dans les villes
+    hors les 5 cibles (Toulouse/Bordeaux/Pau/Paris/Nancy). Permet de voir les
+    pépites Haute partout en France.
+    """
+    where, params = _target_company_filters(
+        search=search,
+        priority=priority,
+        status=status,
+        city=city,
+        other_haute=other_haute,
+    )
+
     sql = "SELECT * FROM target_companies"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -465,7 +556,8 @@ def list_target_companies(
         "recent": "updated_at DESC",
     }
     sql += " ORDER BY " + sort_clauses.get(sort, sort_clauses["priority"])
-    sql += f" LIMIT {int(limit)}"
+    sql += " LIMIT ? OFFSET ?"
+    params.extend([max(1, int(limit)), max(0, int(offset))])
 
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()

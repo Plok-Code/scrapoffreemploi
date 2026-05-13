@@ -87,9 +87,8 @@ def run_scrape(
     batch_path = None
     if generate_batch and new_ids:
         # Génère un batch ne contenant QUE les nouvelles offres
-        # (l'export par défaut prend toutes les non-scorées, ce qui peut être large)
         from backend.matching import export_batch_to_score
-        path = export_batch_to_score(only_unscored=True, limit=None)
+        path = export_batch_to_score(offer_ids=new_ids)
         batch_path = str(path)
 
     queries.record_scrape_run(
@@ -490,13 +489,13 @@ def check_alive(
     )
 
 
-# --- Suppression auto des offres mortes sans statut user ---
+# --- Archivage auto des offres mortes ---
 
 @dataclass
 class CleanupResult:
     total_checked: int
-    deleted: int            # URL morte + status NULL → supprimé
-    archived: int           # URL morte mais status renseigné → archived seulement
+    deleted: int            # mode purge explicite uniquement
+    archived: int           # URL morte → archived par défaut
     inconclusive: int       # 403/timeout → on touche pas
     still_alive: int
 
@@ -506,13 +505,13 @@ def cleanup_dead_unstatused(
     min_score: int | None = None,
     sleep_between: float = 0.5,
     limit: int | None = None,
+    hard_delete_unstatused: bool = False,
 ) -> CleanupResult:
-    """Ping chaque URL et SUPPRIME les offres mortes sans statut user.
+    """Ping chaque URL et archive les offres mortes.
 
     Règle métier :
-    - URL morte (404/410/soft-404) + `status IS NULL` → DELETE de la DB
-    - URL morte + `status IS NOT NULL` → garder mais marquer `is_active=0`
-      (l'user a postulé ou a une trace utile)
+    - URL morte (404/410/soft-404) → `is_active=0` par défaut
+    - si `hard_delete_unstatused=True`, URL morte + `status IS NULL` → DELETE
     - URL vivante → marquer `is_active=1`
     - URL 403/timeout → on ne touche pas
 
@@ -582,12 +581,12 @@ def cleanup_dead_unstatused(
                     continue
 
             if is_dead:
-                if has_status:
-                    queries.set_alive_state(off["id"], is_active=False)
-                    archived += 1
-                else:
+                if hard_delete_unstatused and not has_status:
                     queries.delete_offer(off["id"])
                     deleted += 1
+                else:
+                    queries.set_alive_state(off["id"], is_active=False)
+                    archived += 1
             else:
                 queries.set_alive_state(off["id"], is_active=True)
                 alive += 1
@@ -612,7 +611,7 @@ class FullScrapeResult:
     per_source: dict[str, ScrapeResult]
     portals_attempted: int
     portals_offers_inserted: int
-    non_alternance_removed: int   # delete + archive après filtre
+    non_alternance_removed: int   # archive par défaut, delete seulement en purge explicite
     total_new: int
     scoring_applied: int
 
@@ -631,15 +630,13 @@ def run_full_scrape(
     Args:
         sources: liste des scrapers de job boards. None = tous (FT+WTTJ+HW).
         max_pages: pages max par mot-clé pour chaque source.
-        do_cleanup: si True, ping URLs existantes ; supprime celles mortes+sans statut, archive les autres.
+        do_cleanup: si True, ping URLs existantes et archive celles mortes.
         do_auto_score: si True, lance le heuristic scorer sur les nouvelles offres.
         do_portals: si True, scrape aussi les portails de chaque target_company avec source_url.
         use_playwright_fallback: si True, lance Playwright sur les portails SPA sans API (lent).
     """
-    from backend.scrapers.registry import list_scrapers
-
     if sources is None:
-        sources = [s for s in list_scrapers() if s != "generic"]
+        sources = ["francetravail", "wttj", "hellowork"]
 
     cleanup_result: CleanupResult | None = None
     if do_cleanup:
@@ -681,7 +678,7 @@ def run_full_scrape(
                 total_duplicates=0, error=str(e),
             )
 
-    # Filtre non-alternance : delete/archive les offres CDI/CDD/stage seul/senior/etc.
+    # Filtre non-alternance : archive les offres CDI/CDD/stage seul/senior/etc.
     # Appliqué après les scrapes pour rattraper les faux positifs (FT renvoie parfois
     # des CDI Senior malgré natureContrat=E1,E2).
     from backend.filter_alternance import filter_non_alternance_offers

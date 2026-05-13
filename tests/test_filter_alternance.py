@@ -78,3 +78,50 @@ class TestClassifyOffer:
             "Vous avez 5+ ans d'expérience en data engineering",
         )
         assert v == "reject"
+
+
+class TestFilterNonAlternanceOffers:
+    @pytest.fixture
+    def temp_db(self, tmp_path, monkeypatch):
+        db_file = tmp_path / "test.db"
+        monkeypatch.setattr("backend.db.DB_PATH", db_file)
+        from backend.db import init_schema
+
+        init_schema()
+        return db_file
+
+    def test_rejected_offer_archived_by_default(self, temp_db):
+        from backend.db import db as _db
+        from backend.filter_alternance import filter_non_alternance_offers
+
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO offers (id, title, description, dedup_key) "
+                "VALUES (1, 'Senior Machine Learning Engineer', 'CDI', 'senior|ml|')"
+            )
+
+        result = filter_non_alternance_offers()
+
+        assert result["reject_archived"] == 1
+        assert result["reject_deleted"] == 0
+        with _db() as conn:
+            row = conn.execute("SELECT is_active FROM offers WHERE id = 1").fetchone()
+        assert row is not None
+        assert row["is_active"] == 0
+
+    def test_rejected_offer_can_be_hard_deleted_explicitly(self, temp_db):
+        from backend.db import db as _db
+        from backend.filter_alternance import filter_non_alternance_offers
+
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO offers (id, title, description, dedup_key) "
+                "VALUES (1, 'Senior Machine Learning Engineer', 'CDI', 'senior|ml|')"
+            )
+
+        result = filter_non_alternance_offers(hard_delete_unstatused=True)
+
+        assert result["reject_deleted"] == 1
+        with _db() as conn:
+            row = conn.execute("SELECT id FROM offers WHERE id = 1").fetchone()
+        assert row is None

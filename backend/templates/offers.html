@@ -74,6 +74,7 @@
 
 <!-- Filtres -->
 <form method="get" action="/" class="bg-white border border-slate-200 rounded p-3 mb-4 flex flex-wrap gap-3 items-end">
+    <input type="hidden" name="per_page" value="{{ pagination.per_page }}" />
     <div class="flex-1 min-w-48">
         <label class="block text-xs text-slate-500 mb-1">Recherche (titre, entreprise, ville)</label>
         <input type="text" name="search" value="{{ filters.search }}"
@@ -131,7 +132,9 @@
 <!-- Tableau -->
 <div class="bg-white border border-slate-200 rounded overflow-hidden">
     <div class="px-3 py-2 border-b border-slate-200 text-sm text-slate-600">
-        {{ offers|length }} offre{% if offers|length > 1 %}s{% endif %} affichée{% if offers|length > 1 %}s{% endif %}
+        {{ pagination.total }} offre{% if pagination.total > 1 %}s{% endif %} au total —
+        {{ offers|length }} affichée{% if offers|length > 1 %}s{% endif %}
+        {% if pagination.total_pages > 1 %}(page {{ pagination.page }}/{{ pagination.total_pages }}){% endif %}
     </div>
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
@@ -199,5 +202,26 @@
         </tbody>
     </table>
     </div>
+    {% if pagination.total_pages > 1 %}
+    <div class="px-3 py-2 border-t border-slate-200 flex items-center justify-between text-sm">
+        {% if pagination.has_prev %}
+            <a href="{{ request.url.include_query_params(page=pagination.page - 1) }}"
+               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
+                Précédent
+            </a>
+        {% else %}
+            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Précédent</span>
+        {% endif %}
+        <span class="text-slate-500">Page {{ pagination.page }} sur {{ pagination.total_pages }}</span>
+        {% if pagination.has_next %}
+            <a href="{{ request.url.include_query_params(page=pagination.page + 1) }}"
+               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
+                Suivant
+            </a>
+        {% else %}
+            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Suivant</span>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 {% endblock %}

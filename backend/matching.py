@@ -33,8 +33,20 @@ def _today_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _timestamp_iso() -> str:
+    return datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _default_batch_path() -> Path:
+    """Chemin de batch sans écraser un export déjà présent le même jour."""
+    daily = BATCHES_DIR / f"{_today_iso()}_to_score.json"
+    if not daily.exists():
+        return daily
+    return BATCHES_DIR / f"{_timestamp_iso()}_to_score.json"
 
 
 def export_batch_to_score(
@@ -42,6 +54,7 @@ def export_batch_to_score(
     only_unscored: bool = True,
     limit: int | None = None,
     output_path: Path | None = None,
+    offer_ids: list[int] | None = None,
 ) -> Path:
     """Exporte un batch d'offres dans un JSON prêt à être scoré.
 
@@ -50,16 +63,25 @@ def export_batch_to_score(
                        OU dont le score est antérieur à la grille v1.0 (legacy regex).
         limit: nombre max d'offres à inclure (None = toutes).
         output_path: chemin de sortie. Si None, génère `data/batches/{date}_to_score.json`.
+        offer_ids: si fourni, exporte uniquement ces IDs (utile après un scrape).
 
     Returns:
         Path du fichier JSON créé.
     """
     BATCHES_DIR.mkdir(parents=True, exist_ok=True)
     if output_path is None:
-        output_path = BATCHES_DIR / f"{_today_iso()}_to_score.json"
+        output_path = _default_batch_path()
 
     where = ""
-    if only_unscored:
+    params: list[int] = []
+    if offer_ids is not None:
+        if offer_ids:
+            placeholders = ",".join("?" * len(offer_ids))
+            where = f"WHERE id IN ({placeholders})"  # nosec B608 : placeholders only
+            params = [int(i) for i in offer_ids]
+        else:
+            where = "WHERE 1 = 0"
+    elif only_unscored:
         # "Pas scoré" OU "scoré par l'ancien regex" (= avant la grille v1.0,
         # donc avec match_score mais SANS les 5 sous-scores)
         where = """
@@ -77,7 +99,7 @@ def export_batch_to_score(
         sql += f" LIMIT {int(limit)}"
 
     with db() as conn:
-        rows = [dict(r) for r in conn.execute(sql).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     batch = {
         "generated_at": _now_iso(),

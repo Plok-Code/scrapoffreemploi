@@ -43,7 +43,7 @@
                             <h3 class="text-sm font-semibold text-emerald-900 mb-1">Tout scraper (recommandé)</h3>
                             <p class="text-xs text-emerald-700 mb-2">
                                 FT + WTTJ + HelloWork en séquence.
-                                Avant le scrape : nettoie les URLs mortes (sans statut → supprimées, avec statut → archivées).
+                                Avant le scrape : archive les URLs mortes pour préserver l'historique local.
                                 Après : scoring auto (heuristique) sur les nouvelles offres.
                             </p>
                             {# hx-swap="none" : la réponse JSON `{"ok": true, ...}` n'est PAS
@@ -154,9 +154,9 @@
             stats.appendChild(newDiv);
             stats.appendChild(el('div', null, '• Doublons : ' + (json.total_duplicates || 0)));
             if (json.deleted_dead > 0)
-                stats.appendChild(el('div', null, '• 🗑 Supprimées (URL morte + sans statut) : ' + json.deleted_dead));
+                stats.appendChild(el('div', null, '• 🗑 Supprimées (mode purge explicite) : ' + json.deleted_dead));
             if (json.archived_dead > 0)
-                stats.appendChild(el('div', null, '• 📦 Archivées (URL morte + avec statut) : ' + json.archived_dead));
+                stats.appendChild(el('div', null, '• 📦 Archivées (URL morte) : ' + json.archived_dead));
             if (json.portals_attempted > 0) {
                 let p = '• 🏢 Portails entreprises scrapés : ' + json.portals_attempted;
                 if (json.portals_offers_inserted !== undefined)
