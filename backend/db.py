@@ -7,7 +7,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "data" / "app.db"
-SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -35,43 +34,20 @@ def db():
 
 
 def init_schema() -> None:
-    """Crée les tables si elles n'existent pas. Idempotent.
+    """Initialise / met à jour le schéma DB via le runner de migrations.
 
-    Inclut une mini-migration : ajoute les colonnes manquantes AVANT d'exécuter
-    le schéma (les nouveaux index référencent ces colonnes).
+    Applique toutes les migrations en attente dans `backend/migrations/`
+    (cf `backend/_migrations.py`). Idempotent : sur une DB à jour, c'est
+    un no-op (les migrations sont déjà dans `schema_migrations`).
+
+    Appelée au boot de l'app (lifespan dans `backend/main.py`) et au début
+    de chaque seed script. Les anciens ALTER TABLE conditionnels qui vivaient
+    ici sont désormais formalisés dans les fichiers de migration.
     """
-    schema = SCHEMA_PATH.read_text(encoding="utf-8")
-    with db() as conn:
-        # Étape 1 : migrations conditionnelles si la table existe déjà
-        table_exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='offers'"
-        ).fetchone()
-        if table_exists:
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(offers)").fetchall()}
-            if "is_active" not in cols:
-                conn.execute("ALTER TABLE offers ADD COLUMN is_active INTEGER DEFAULT 1")
-                conn.execute("UPDATE offers SET is_active = 1 WHERE is_active IS NULL")
-            if "last_checked_at" not in cols:
-                conn.execute("ALTER TABLE offers ADD COLUMN last_checked_at TEXT")
-        # Migration target_companies (colonnes city + source ajoutées après v1)
-        target_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='target_companies'"
-        ).fetchone()
-        if target_table:
-            tc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(target_companies)").fetchall()}
-            if "city" not in tc_cols:
-                conn.execute("ALTER TABLE target_companies ADD COLUMN city TEXT")
-            if "source" not in tc_cols:
-                conn.execute("ALTER TABLE target_companies ADD COLUMN source TEXT")
-                conn.execute("UPDATE target_companies SET source = 'xlsx historique' WHERE source IS NULL")
-            # Index UNIQUE : passage de (name) seul à (name, city) — autorise multi-implantation
-            old_idx = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_target_companies_name'"
-            ).fetchone()
-            if old_idx:
-                conn.execute("DROP INDEX idx_target_companies_name")
-        # Étape 2 : appliquer le schéma complet (CREATE IF NOT EXISTS + indexes)
-        conn.executescript(schema)
+    # Import tardif : `_migrations` importe `db.get_connection` paresseusement
+    # via le param `conn_factory`. Pas de cycle direct.
+    from backend._migrations import apply_migrations
+    apply_migrations()
 
 
 def normalize_for_dedup(text: str | None) -> str:

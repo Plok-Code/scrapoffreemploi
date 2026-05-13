@@ -1,23 +1,14 @@
--- ╔════════════════════════════════════════════════════════════════════════╗
--- ║  📚 RÉFÉRENCE DOCUMENTAIRE — pas appliqué directement par l'app        ║
--- ║                                                                        ║
--- ║  Le schéma vivant est désormais piloté par le runner de migrations     ║
--- ║  versionnées dans `backend/migrations/` (voir `backend/_migrations.py` ║
--- ║  et la table `schema_migrations`).                                     ║
--- ║                                                                        ║
--- ║  Ce fichier est conservé comme **vue synthétique** du schéma actuel    ║
--- ║  (état après toutes les migrations appliquées). Pratique pour lire le  ║
--- ║  schéma d'un coup d'œil sans empiler les migrations.                   ║
--- ║                                                                        ║
--- ║  Pour faire évoluer le schéma : créer une nouvelle migration           ║
--- ║  `backend/migrations/{NNN}_<descripteur>.sql` (ALTER TABLE, etc.) et   ║
--- ║  mettre à jour ce fichier en miroir pour la lisibilité.                ║
--- ║                                                                        ║
--- ║  Voir aussi : .claude/rules/database.md                                ║
--- ╚════════════════════════════════════════════════════════════════════════╝
-
--- Schéma SQLite pour scrapoffreemploi
--- Une seule table principale `offers` + une table `scrape_runs` pour l'historique
+-- Migration 001 — baseline schema
+--
+-- Snapshot du schéma SQLite tel qu'il existait au moment de l'introduction du
+-- système de migrations versionnées (mai 2026). Idempotent via `IF NOT EXISTS` :
+-- une DB existante voit cette migration comme un no-op (tables déjà créées),
+-- puis elle est marquée comme appliquée dans `schema_migrations`. Une DB neuve
+-- la voit comme une création complète.
+--
+-- Pour évoluer le schéma : créer un nouveau fichier `002_<descripteur>.sql`
+-- (ALTER TABLE ADD COLUMN, CREATE INDEX, etc.). Ne JAMAIS modifier les
+-- migrations déjà publiées — elles sont historiquement immuables.
 
 CREATE TABLE IF NOT EXISTS offers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +53,7 @@ CREATE TABLE IF NOT EXISTS offers (
     last_checked_at TEXT,               -- dernier check HTTP de l'URL
     is_active INTEGER DEFAULT 1,        -- 1 = URL toujours valide, 0 = 404/410/archived
 
-    -- Clé de dédoublonnage (titre + entreprise normalisés) pour fallback URL manquante
+    -- Clé de dédoublonnage (titre + entreprise + ville normalisés)
     dedup_key TEXT
 );
 
@@ -74,7 +65,6 @@ CREATE INDEX IF NOT EXISTS idx_offers_source ON offers(source);
 CREATE INDEX IF NOT EXISTS idx_offers_date_published ON offers(date_published DESC);
 CREATE INDEX IF NOT EXISTS idx_offers_is_active ON offers(is_active);
 
--- Trigger pour updated_at
 CREATE TRIGGER IF NOT EXISTS offers_updated_at
 AFTER UPDATE ON offers
 FOR EACH ROW
@@ -83,7 +73,6 @@ BEGIN
 END;
 
 -- Entreprises cibles "candidature spontanée" (phase 2)
--- Importées initialement depuis data/companies_spontaneous_extracted.json
 CREATE TABLE IF NOT EXISTS target_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

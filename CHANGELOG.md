@@ -6,6 +6,63 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Added — Sprint qualité (14 mai 2026) : audit GPT — Vague 3 (migrations versionnées)
+
+Le point « migrations trop artisanales » de l'audit GPT est traité : on
+remplace les `ALTER TABLE ... if column not in cols` éparpillés dans
+`init_schema()` par un vrai runner de migrations versionnées avec table
+de tracking. Compatibilité : la DB du user (1189 offres, backups) est
+préservée — la migration v1 est marquée appliquée sans rien re-créer
+(CREATE IF NOT EXISTS).
+
+#### Système de migrations
+
+- **`backend/migrations/`** : dossier de fichiers SQL numérotés (convention
+  `{NNN}_<descripteur>.sql`).
+- **`backend/migrations/001_initial.sql`** : baseline = schéma courant complet
+  (offers + target_companies + scrape_runs + indexes + triggers). Idempotent
+  via `CREATE TABLE IF NOT EXISTS` pour gérer les DB existantes.
+- **`backend/_migrations.py`** : runner avec `apply_migrations()` (itère sur
+  les fichiers triés par version, applique en transaction ceux absents de
+  `schema_migrations`, log chaque application) + `current_schema_version()`
+  (max version appliquée, 0 si aucune).
+- **Table `schema_migrations(version INTEGER PK, name TEXT, applied_at TEXT)`** :
+  créée automatiquement au premier `apply_migrations()`.
+- **Tri par version numérique** : `010_xxx.sql` vient après `002_xxx.sql`
+  (pas de surprise lexicographique).
+- **Validation au chargement** : doublons de version → `RuntimeError` clair ;
+  fichiers mal nommés → ignorés avec `logger.warning`.
+- **Rollback transactionnel** : si une migration SQL invalide casse, la
+  transaction est rollback et l'exception remonte — les migrations suivantes
+  ne sont pas tentées (état DB cohérent).
+
+#### Intégration
+
+- **`backend/db.py:init_schema()`** : simplifié — appelle juste
+  `apply_migrations()`. Les anciens `ALTER TABLE ADD COLUMN IF...` (4 colonnes,
+  un DROP INDEX) sont supprimés (formalisés dans la migration 001).
+- **`backend/schema.sql`** : conservé comme **référence documentaire** du
+  schéma final (vue synthétique). Plus appliqué directement par l'app.
+  Header banderole explicite. Pour évoluer, créer une nouvelle migration.
+
+#### Tests
+
+- **`tests/test_migrations.py`** : 14 nouveaux tests, ~0.8s. Couvre :
+  application sur DB vide, sur schéma pré-existant, idempotence, tri
+  numérique des versions, ignorance des fichiers mal nommés, doublons de
+  version → RuntimeError, rollback transactionnel sur SQL invalide,
+  table `schema_migrations` (colonnes, applied_at), `current_schema_version()`
+  retours 0 / max version, alias `init_schema()`.
+
+#### Validation E2E
+
+- DB du user (1189 offres) : `apply_migrations()` appliquée → v1 marquée
+  appliquée sans re-créer les tables (no-op SQL), aucune donnée perdue.
+- `pytest tests/ -q` : **144 passed in ~4.6s** (130 → 144, +14 migration tests).
+- `bandit -r backend cli.py` : **0 issues** (stdout, exit 0).
+- Smoke test `from backend.main import app` : 18 routes OK, stats total=1189,
+  schema_version=1.
+
 ### Added / Changed — Sprint qualité (13 mai 2026) : audit GPT — Vague 1 + 2
 
 Suite à un audit externe (cf branche `claude/intelligent-easley-f22566`),
