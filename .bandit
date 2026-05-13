@@ -1,23 +1,6 @@
-# Bandit config pour scrapoffreemploi
-# https://bandit.readthedocs.io/en/latest/config.html
+# Bandit config moved to pyproject.toml [tool.bandit].
+# Run :   bandit -r backend cli.py
 #
-# B608 (hardcoded_sql_expressions) : on construit du SQL via f-string MAIS
-# uniquement avec des keys whitelistées (ORDER BY mapping, set_clause issu
-# de ALLOWED_UPDATE_FIELDS, etc.). Aucune valeur user directe ne va dans le
-# SQL — toutes les vars passent par paramétrage `:name` ou `?`.
-# Voir .claude/rules/database.md "Règles" : "JAMAIS de string concat pour le SQL".
-# Les cas restants sont audités à la main et marqués `# nosec B608` au cas par cas.
-#
-# B110/B112 (try/except/pass et try/except/continue) : déjà traités, mais certains
-# restent dans des chemins where loggue dégraderait le perf (ex inner loop d'un
-# scraper qui itère 1000 offres). On log warning au call-site outer, pas en inner.
-
-skips: [B608]
-
-exclude_dirs:
-  - tests
-  - legacy
-  - data
-  - .venv
-  - .claude
-  - reference
+# Pas besoin de `-c pyproject.toml` : tous les faux positifs B608 sont annotés
+# `# nosec B608` à la ligne, avec un commentaire explicatif au-dessus du SQL.
+# Bandit default invocation est clean (0 issues).

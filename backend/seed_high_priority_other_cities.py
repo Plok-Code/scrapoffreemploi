@@ -1,4 +1,4 @@
-"""Seed des entreprises priorité Haute hors-5 villes cibles.
+﻿"""Seed des entreprises priorité Haute hors-5 villes cibles.
 
 Règle métier :
 - 5 villes cibles (Toulouse, Bordeaux, Pau, Paris, Nancy) → toutes les priorités
@@ -24,8 +24,13 @@ EXCLUDED_CITY_PATTERNS = ["toulouse", "bordeaux", "pau", "paris", "nancy"]
 
 def fetch_high_priority_other_cities(*, min_score: int = MIN_SCORE_HIGH_PRIORITY) -> list[dict]:
     """Retourne les couples (entreprise, ville) avec offres ≥ min_score, hors-5-villes."""
+    # `exclusions` est construit depuis la constante EXCLUDED_CITY_PATTERNS
+    # (liste hardcodée module-level). Les valeurs des villes passent via params
+    # nommés `:ex{i}` (jamais concaténées dans le SQL). On utilise .format()
+    # sur un template constant pour garder le multi-line lisible ET permettre
+    # le marqueur de skip B608 sur une seule ligne.
     exclusions = " AND ".join(f"LOWER(city) NOT LIKE :ex{i}" for i in range(len(EXCLUDED_CITY_PATTERNS)))
-    sql = f"""
+    sql_template = """
         SELECT
             company AS name,
             city,
@@ -42,6 +47,7 @@ def fetch_high_priority_other_cities(*, min_score: int = MIN_SCORE_HIGH_PRIORITY
         GROUP BY LOWER(company), LOWER(city)
         ORDER BY max_score DESC, n_offers DESC
     """
+    sql = sql_template.format(exclusions=exclusions)  # nosec B608
     params: dict = {"min_score": min_score}
     for i, p in enumerate(EXCLUDED_CITY_PATTERNS):
         params[f"ex{i}"] = f"%{p}%"

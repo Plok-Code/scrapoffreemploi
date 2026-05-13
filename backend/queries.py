@@ -1,4 +1,4 @@
-"""Couche d'accès aux données : requêtes sur la table offers."""
+﻿"""Couche d'accès aux données : requêtes sur la table offers."""
 from __future__ import annotations
 
 import sqlite3
@@ -151,34 +151,47 @@ def list_distinct_statuses() -> list[str]:
 
 
 def get_stats() -> dict:
-    """KPIs pour la barre de stats en haut de page (offres actives uniquement)."""
-    active_clause = "(is_active IS NULL OR is_active = 1)"
+    """KPIs pour la barre de stats en haut de page (offres actives uniquement).
+
+    Toutes les queries sont des littéraux SQL constants (pas de f-string ni
+    d'input user) — défensif et bandit-clean sans `# nosec`.
+    """
     with db() as conn:
         cur = conn.cursor()
-        total = cur.execute(f"SELECT COUNT(*) FROM offers WHERE {active_clause}").fetchone()[0]
+        total = cur.execute(
+            "SELECT COUNT(*) FROM offers WHERE (is_active IS NULL OR is_active = 1)"
+        ).fetchone()[0]
         to_apply = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE status IS NULL AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE status IS NULL "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         applied = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE status = 'Postulé' AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE status = 'Postulé' "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         interviews = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE status = 'Entretien' AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE status = 'Entretien' "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         refused = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE status = 'Refusé' AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE status = 'Refusé' "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         top_fit = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE match_score >= 80 AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE match_score >= 80 "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         bon_fit = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80 AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80 "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         unscored = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE match_score IS NULL AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE match_score IS NULL "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         not_interested = cur.execute(
-            f"SELECT COUNT(*) FROM offers WHERE status = 'Pas intéressé' AND {active_clause}"
+            "SELECT COUNT(*) FROM offers WHERE status = 'Pas intéressé' "
+            "AND (is_active IS NULL OR is_active = 1)"
         ).fetchone()[0]
         archived = cur.execute("SELECT COUNT(*) FROM offers WHERE is_active = 0").fetchone()[0]
     return {
@@ -429,7 +442,8 @@ def update_offer(offer_id: int, fields: dict[str, Any]) -> bool:
     _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
     _validate_enum("remote", clean.get("remote"), VALID_REMOTE)
 
-    set_clause = ", ".join(f"{k} = :{k}" for k in clean)  # nosec B608 : clean keys whitelistés via ALLOWED_UPDATE_FIELDS
+    # `clean` keys filtrés via ALLOWED_UPDATE_FIELDS (whitelist), valeurs via :name.
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
     sql = f"UPDATE offers SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = offer_id
     with db() as conn:
@@ -596,7 +610,9 @@ def count_other_haute() -> int:
     for c in TARGET_CITIES:
         where_parts.append("LOWER(COALESCE(city, '')) NOT LIKE ?")
         params.append(f"%{c.lower()}%")
-    sql = f"SELECT COUNT(*) AS n FROM target_companies WHERE {' AND '.join(where_parts)}"
+    # `where_parts` ne contient que des fragments SQL littéraux construits dans
+    # la fonction (pas d'input user). Les valeurs partent via `?`.
+    sql = f"SELECT COUNT(*) AS n FROM target_companies WHERE {' AND '.join(where_parts)}"  # nosec B608
     with db() as conn:
         return conn.execute(sql, params).fetchone()["n"]
 
@@ -752,7 +768,8 @@ def update_target_company(company_id: int, fields: dict[str, Any]) -> bool:
     _validate_enum("status", clean.get("status"), VALID_COMPANY_STATUSES)
     _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
 
-    set_clause = ", ".join(f"{k} = :{k}" for k in clean)  # nosec B608 : keys whitelistés
+    # `clean` keys filtrés via ALLOWED_COMPANY_UPDATE_FIELDS (whitelist), valeurs via :name.
+    set_clause = ", ".join(f"{k} = :{k}" for k in clean)
     sql = f"UPDATE target_companies SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = company_id
     with db() as conn:

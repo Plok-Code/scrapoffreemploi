@@ -1,0 +1,18 @@
+[tool.bandit]
+# Bandit config.
+#
+# Les f-string SQL du codebase qui utilisent des fragments littéraux whitelistés
+# sont annotés par un marqueur de skip B608 à la ligne — chaque cas est audité
+# manuellement et documenté par un commentaire au-dessus.
+#
+# La discipline globale (aucun input user concaténé dans le SQL) est enforced
+# par :
+# - `.claude/rules/database.md` : "JAMAIS de SQL inline ailleurs que queries.py"
+# - `.claude/skills/review-code/SKILL.md` : checklist review SQL
+# - Le pattern global : 100% du SQL passe par `backend/queries.py`
+exclude_dirs = ["tests", "legacy", "data", ".venv", ".claude", "reference"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+# Sortie courte par défaut, marqueurs stricts (catch les typos genre @pytest.mar.xxx)

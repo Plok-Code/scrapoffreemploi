@@ -1,4 +1,4 @@
-"""Scrape des portails d'entreprises (target_companies.source_url).
+﻿"""Scrape des portails d'entreprises (target_companies.source_url).
 
 Pour chaque entreprise cible avec un portail, tente d'extraire les offres IA/data
 en alternance via :
@@ -532,8 +532,10 @@ def scrape_target_company_portals(
     if city_filter:
         where.append("LOWER(city) LIKE ?")
         params.append(f"%{city_filter.lower()}%")
+    # `where` est une liste de fragments SQL littéraux construits dans la
+    # fonction (jamais d'input user). `city_filter` passe via `?`.
     sql = (
-        f"SELECT id, name, source_url FROM target_companies "
+        f"SELECT id, name, source_url FROM target_companies "  # nosec B608
         f"WHERE {' AND '.join(where)} ORDER BY id"
     )
     if limit:

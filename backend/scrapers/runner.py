@@ -1,4 +1,4 @@
-"""Orchestrateur de scraping : lance un scraper, insère en DB, génère le batch."""
+﻿"""Orchestrateur de scraping : lance un scraper, insère en DB, génère le batch."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -178,7 +178,9 @@ def enrich_descriptions(
     if source:
         where.append("LOWER(source) LIKE LOWER(?)")
         params.append(f"{source}%")
-    sql = f"SELECT id, url, source FROM offers WHERE {' AND '.join(where)} ORDER BY id"
+    # `where` ne contient que des fragments SQL littéraux construits dans la
+    # fonction. `source` passe via `?` (params positionnels), `limit` via int().
+    sql = f"SELECT id, url, source FROM offers WHERE {' AND '.join(where)} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -417,7 +419,9 @@ def check_alive(
     if min_score is not None:
         where.append("match_score >= ?")
         params.append(min_score)
-    sql = f"SELECT id, url FROM offers WHERE {' AND '.join(where)} ORDER BY match_score DESC NULLS LAST, id"
+    # `where` est uniquement composé de fragments SQL littéraux ("url IS NOT NULL",
+    # "match_score >= ?"...). `min_score` passe via `?`, limit via int().
+    sql = f"SELECT id, url FROM offers WHERE {' AND '.join(where)} ORDER BY match_score DESC NULLS LAST, id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -523,7 +527,9 @@ def cleanup_dead_unstatused(
     if min_score is not None:
         where.append("match_score >= ?")
         params.append(min_score)
-    sql = f"SELECT id, url, status FROM offers WHERE {' AND '.join(where)} ORDER BY id"
+    # `where` ne contient que des fragments SQL littéraux. `min_score` passe via
+    # `?`, `limit` via int(). Pas d'input user.
+    sql = f"SELECT id, url, status FROM offers WHERE {' AND '.join(where)} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -614,6 +620,7 @@ class FullScrapeResult:
     non_alternance_removed: int   # archive par défaut, delete seulement en purge explicite
     total_new: int
     scoring_applied: int
+    batch_file: str | None = None  # chemin du JSON batch si generate_batch=True
 
 
 def run_full_scrape(
@@ -624,6 +631,7 @@ def run_full_scrape(
     do_auto_score: bool = True,
     do_portals: bool = True,
     use_playwright_fallback: bool = False,
+    generate_batch: bool = False,
 ) -> FullScrapeResult:
     """Lance un scrape multi-source complet : cleanup → job boards → portails entreprises → scoring auto.
 
@@ -634,6 +642,10 @@ def run_full_scrape(
         do_auto_score: si True, lance le heuristic scorer sur les nouvelles offres.
         do_portals: si True, scrape aussi les portails de chaque target_company avec source_url.
         use_playwright_fallback: si True, lance Playwright sur les portails SPA sans API (lent).
+        generate_batch: si True, écrit `data/batches/{date}_to_score.json` avec
+            les nouvelles offres de ce run (pour scoring LLM manuel via chat).
+            Par défaut False — le scoring heuristique auto suffit pour la routine ;
+            cocher cette option si tu veux un scoring LLM précis par-dessus.
     """
     if sources is None:
         sources = ["francetravail", "wttj", "hellowork"]
@@ -650,6 +662,13 @@ def run_full_scrape(
             per_source[src] = r
             total_new += r.total_new
         except Exception as e:  # noqa: BLE001
+            # Loguer le traceback complet dans errors.log avant de continuer
+            # sur le scraper suivant — sinon un seul `str(e)` en DB rend le
+            # diagnostic impossible (ex : changement de design HTML, OAuth KO).
+            logger.opt(exception=True).warning(
+                "Scraper KO dans run_full_scrape : source={s} err={err}",
+                s=src, err=str(e),
+            )
             per_source[src] = ScrapeResult(
                 source=src, total_fetched=0, total_new=0,
                 total_duplicates=0, batch_file=None, new_ids=[],
@@ -673,6 +692,11 @@ def run_full_scrape(
             portals_inserted = pr.new_offers_inserted
             total_new += pr.new_offers_inserted
         except Exception as e:  # noqa: BLE001
+            # Échec global du scrape de portails — log traceback complet dans
+            # errors.log pour diagnostiquer (changement Workable/Lever/Workday).
+            logger.opt(exception=True).warning(
+                "Scrape portails entreprises KO : err={err}", err=str(e),
+            )
             queries.record_scrape_run(
                 sources="portails-entreprises", total_fetched=0, total_new=0,
                 total_duplicates=0, error=str(e),
@@ -691,6 +715,24 @@ def run_full_scrape(
         result = apply_heuristic_to_unscored()
         scoring_applied = result["updated"]
 
+    # Génération d'un batch JSON pour scoring LLM manuel — uniquement les
+    # nouvelles offres de ce run (agrège new_ids de tous les scrapers).
+    # Le filtre alternance peut avoir supprimé/archivé certaines de ces nouvelles
+    # offres, mais matching.py filtre déjà les non-existantes au format.
+    batch_file: str | None = None
+    if generate_batch:
+        new_ids: list[int] = []
+        for r in per_source.values():
+            new_ids.extend(r.new_ids)
+        if new_ids:
+            from backend.matching import export_batch_to_score
+            path = export_batch_to_score(offer_ids=new_ids)
+            batch_file = str(path)
+            logger.info(
+                "Batch scoring LLM généré : {p} ({n} nouvelles offres)",
+                p=batch_file, n=len(new_ids),
+            )
+
     return FullScrapeResult(
         cleanup=cleanup_result,
         per_source=per_source,
@@ -699,4 +741,5 @@ def run_full_scrape(
         non_alternance_removed=non_alternance_removed,
         total_new=total_new,
         scoring_applied=scoring_applied,
+        batch_file=batch_file,
     )

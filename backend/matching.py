@@ -1,4 +1,4 @@
-"""Module matching : export d'un batch d'offres pour scoring LLM + apply des scores.
+﻿"""Module matching : export d'un batch d'offres pour scoring LLM + apply des scores.
 
 Workflow :
 1. `export_batch_to_score()` : génère data/batches/{date}_to_score.json
@@ -52,18 +52,24 @@ def _default_batch_path() -> Path:
 def export_batch_to_score(
     *,
     only_unscored: bool = True,
+    offer_ids: list[int] | None = None,
     limit: int | None = None,
     output_path: Path | None = None,
-    offer_ids: list[int] | None = None,
 ) -> Path:
     """Exporte un batch d'offres dans un JSON prêt à être scoré.
 
     Args:
         only_unscored: si True (défaut), n'exporte que les offres sans match_score
                        OU dont le score est antérieur à la grille v1.0 (legacy regex).
+                       Ignoré si `offer_ids` est fourni.
+        offer_ids: si fourni (même vide), override `only_unscored` :
+                   - liste non vide → filtre `WHERE id IN (...)` (placeholders)
+                   - liste vide → résultat vide (`WHERE 1 = 0`) — distingué de None
+                   - None (défaut) → fall through à `only_unscored`.
+                   Utile pour batcher juste les nouvelles offres d'un scrape
+                   (combo avec `run_full_scrape(generate_batch=True)`).
         limit: nombre max d'offres à inclure (None = toutes).
         output_path: chemin de sortie. Si None, génère `data/batches/{date}_to_score.json`.
-        offer_ids: si fourni, exporte uniquement ces IDs (utile après un scrape).
 
     Returns:
         Path du fichier JSON créé.
@@ -76,25 +82,24 @@ def export_batch_to_score(
     params: list[int] = []
     if offer_ids is not None:
         if offer_ids:
+            # Filtre par ids — placeholders `?` un par id (pas d'input user dans le SQL)
             placeholders = ",".join("?" * len(offer_ids))
-            where = f"WHERE id IN ({placeholders})"  # nosec B608 : placeholders only
+            where = f"WHERE id IN ({placeholders})"  # nosec B608
             params = [int(i) for i in offer_ids]
         else:
+            # Liste explicitement vide : résultat vide (distinct de None = pas de filtre)
             where = "WHERE 1 = 0"
     elif only_unscored:
         # "Pas scoré" OU "scoré par l'ancien regex" (= avant la grille v1.0,
         # donc avec match_score mais SANS les 5 sous-scores)
-        where = """
-            WHERE match_score IS NULL
-               OR score_pipeline IS NULL
-        """
+        where = "WHERE match_score IS NULL OR score_pipeline IS NULL"
+    else:
+        where = ""
 
-    sql = f"""
-        SELECT {", ".join(OFFER_FIELDS_FOR_BATCH)}
-        FROM offers
-        {where}
-        ORDER BY id ASC
-    """
+    # OFFER_FIELDS_FOR_BATCH est une constante module-level (tuple de noms de
+    # colonnes hardcodés), `where` est construit ci-dessus depuis des fragments
+    # littéraux + placeholders. Aucun input user dans le SQL.
+    sql = f"SELECT {', '.join(OFFER_FIELDS_FOR_BATCH)} FROM offers {where} ORDER BY id ASC"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -215,9 +220,11 @@ def is_batch_applied(batch_path: Path) -> bool:
     offer_ids = [o.get("id") for o in offers if isinstance(o.get("id"), int)]
     if not offer_ids:
         return True  # batch vide = rien à scorer
+    # `placeholders` est uniquement composé de `?` (un par offer_id) — les
+    # valeurs partent via le 2e arg de execute().
     placeholders = ",".join("?" * len(offer_ids))
     sql = (
-        f"SELECT COUNT(*) AS unscored FROM offers "  # nosec B608 : placeholders, pas user input
+        f"SELECT COUNT(*) AS unscored FROM offers "  # nosec B608
         f"WHERE id IN ({placeholders}) AND match_score IS NULL"
     )
     with db() as conn:

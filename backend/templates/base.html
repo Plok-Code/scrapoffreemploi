@@ -4,10 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Scrap'Offre Emploi{% endblock %}</title>
-    {# Tailwind CDN : bundle dynamique (pas de SRI possible car le hash change
-       à chaque release). Acceptable pour usage personnel local. Pour un usage
-       prod, télécharger Tailwind localement et servir via /static. #}
-    <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
+    {# Tailwind v3.4.17 servi localement (vendored dans backend/static/).
+       Pas de dépendance réseau, pas de tracking CDN, SRI vérifié.
+       Pour mettre à jour : télécharger https://cdn.tailwindcss.com/{version},
+       placer dans backend/static/, recalculer le sha384 SRI (cf README). #}
+    <script src="/static/tailwind-3.4.17.min.js"
+            integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K"
+            crossorigin="anonymous"></script>
     {# HTMX 2.0.4 : version pinnée, SRI calculée via httpx + sha384 #}
     <script src="https://unpkg.com/htmx.org@2.0.4"
             integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"

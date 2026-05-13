@@ -1,4 +1,4 @@
-"""Scoreur heuristique pour pré-classer les offres scrapées en masse.
+﻿"""Scoreur heuristique pour pré-classer les offres scrapées en masse.
 
 Stratégie : compter les occurrences de mots-clés techniques par axe, capper à 20.
 Le résultat sert de **pré-tri** pour identifier les offres prometteuses (>= 50)
@@ -230,12 +230,9 @@ def apply_heuristic_to_unscored(
             match_score IS NULL
             AND (is_active IS NULL OR is_active = 1)
         """
-    sql = f"""
-        SELECT id, title, description
-        FROM offers
-        WHERE {where}
-        ORDER BY id
-    """
+    # `where` est une string littérale constante (if/else interne) et `limit`
+    # passe par `int()`. Pas d'input user dans le SQL.
+    sql = f"SELECT id, title, description FROM offers WHERE {where} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 

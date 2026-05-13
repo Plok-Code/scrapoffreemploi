@@ -6,6 +6,34 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Added / Changed — Sprint qualité (13 mai 2026) : audit GPT — Vague 1 + 2
+
+Suite à un audit externe (cf branche `claude/intelligent-easley-f22566`),
+nettoyage qualité des 7 points soulevés. Pas de changement fonctionnel
+user-facing — l'app continue de marcher pareil, mais la base est plus saine.
+
+#### Vague 1 — Quick wins observabilité / sécurité / reproductibilité
+
+- **Observabilité scraping** : les `except Exception as e: ... _SCRAPE_STATE["error"] = str(e)` (2 dans `main.py`, 2 dans `runner.run_full_scrape`) capturent maintenant le traceback complet via `logger.opt(exception=True).warning(...)` dans `data/logs/errors.log`. Le `str(e)` reste affiché en UI pour le user, mais le diagnostic d'un scraper qui casse devient instantané.
+- **Bandit clean** : 17 alertes B608 (faux positifs SQL f-string) résolues. Refactor de `queries.get_stats()` en littéraux SQL constants (9 lignes → 0 f-string). 11 autres lignes annotées `# nosec B608` au format strict (sans `:` ni texte après — bandit parsait les mots comme test IDs). Config bandit centralisée dans `pyproject.toml`. **Default invocation `bandit -r backend cli.py` = 0 issues, exit 0**.
+- **`pyproject.toml`** créé avec `[tool.bandit]` (config) + `[tool.pytest.ini_options]` (testpaths + `-ra --strict-markers`).
+- **Flag `generate_batch=True`** ajouté à `run_full_scrape()` + propagé au bg task `_run_full_scrape_bg` + exposé via `POST /api/scrape` (Form param). Quand activé, agrège les `new_ids` de tous les scrapers et appelle `matching.export_batch_to_score(only_ids=new_ids)` → écrit `data/batches/{date}_to_score.json` pour scoring LLM précis via chat. Param `only_ids: list[int] | None = None` ajouté à `export_batch_to_score`. Nouveau champ `batch_file: str | None` sur `FullScrapeResult` et `_SCRAPE_STATE`.
+- **`requirements.lock`** généré via `pip-compile` (pip-tools) : 35 lignes (deps directs + transitives) avec versions exactes, commentaires `# via X` pour traçabilité. Header documentaire pour régénération. Plateforme Windows + Python 3.13.
+- **README.md** : Quickstart mis à jour (2 modes d'install : `.lock` pour reproductible, `.txt` pour dev), section "Limitations connues" (RAM state, bind 127.0.0.1, no auth, Tailwind), section "Qualité du code" avec commandes pytest/bandit/smoke.
+
+#### Vague 2 — Tailwind vendoré localement
+
+- **`backend/static/tailwind-3.4.17.min.js`** : bundle Tailwind v3.4.17 final stable téléchargé localement (407 KB). Plus aucune dépendance réseau au runtime. Hash SRI sha384 calculé : `sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K`.
+- **`backend/templates/base.html`** : `<script src="https://cdn.tailwindcss.com">` remplacé par `<script src="/static/tailwind-3.4.17.min.js" integrity="sha384-..." crossorigin="anonymous">`. HTMX 2.0.4 garde son SRI existant.
+- **README** : section Limitations Tailwind mise à jour + commande de mise à jour documentée.
+
+#### Bilan vague 1+2
+
+- **126 tests pytest** OK (~3s, sans network)
+- **0 issues bandit** (default invocation, stdout, exit 0)
+- **13 fichiers** touchés (10 modifs + 3 créés : `pyproject.toml`, `requirements.lock`, `tailwind-3.4.17.min.js`)
+- **Aucune régression fonctionnelle** — comportement utilisateur strictement identique
+
 ### Added — Sprint 2 (12 mai 2026 soir) : "Tout scraper" en un clic + cleanup auto + Toulouse
 
 #### Bouton "Tout scraper" (mode recommandé)

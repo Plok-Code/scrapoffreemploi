@@ -468,6 +468,12 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
             "total_duplicates": result.total_duplicates,
         })
     except Exception as e:  # noqa: BLE001
+        # Le traceback complet va dans data/logs/errors.log (loguru backtrace=True).
+        # _SCRAPE_STATE garde juste le message court pour l'affichage UI.
+        logger.opt(exception=True).warning(
+            "Scrape background failed : source={s} err={err}",
+            s=source, err=str(e),
+        )
         _SCRAPE_STATE["error"] = str(e)
     finally:
         _SCRAPE_STATE["running"] = False
@@ -475,7 +481,11 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
         _SCRAPE_STATE["finished_at"] = datetime.now().isoformat(timespec="seconds")
 
 
-def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
+def _run_full_scrape_bg(
+    max_pages: int,
+    use_playwright: bool = False,
+    generate_batch: bool = False,
+) -> None:
     """Tâche d'arrière-plan : scrape complet + cleanup + filtre + scoring auto.
 
     Étapes :
@@ -485,6 +495,8 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
        (+ Playwright si use_playwright=True, sur les SPAs sans API)
     4. Filtre non-alternance (CDI/Senior/stage seul → archive)
     5. Heuristic scoring auto sur les nouvelles offres
+    6. Si `generate_batch=True` : écrit `data/batches/{date}_to_score.json`
+       avec les nouvelles offres pour scoring LLM manuel via chat.
     """
     from datetime import datetime
 
@@ -504,6 +516,7 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
         "scoring_applied": 0,
         "per_source": {},
         "playwright_enabled": use_playwright,
+        "batch_file": None,
         "error": None,
     })
     try:
@@ -514,6 +527,7 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
             do_auto_score=True,
             do_portals=True,
             use_playwright_fallback=use_playwright,
+            generate_batch=generate_batch,
         )
         cleanup = result.cleanup
         per_source_summary = {
@@ -536,8 +550,14 @@ def _run_full_scrape_bg(max_pages: int, use_playwright: bool = False) -> None:
             "non_alternance_removed": result.non_alternance_removed,
             "scoring_applied": result.scoring_applied,
             "per_source": per_source_summary,
+            "batch_file": result.batch_file,
         })
     except Exception as e:  # noqa: BLE001
+        # Le traceback complet va dans data/logs/errors.log (loguru backtrace=True).
+        # _SCRAPE_STATE garde juste le message court pour l'affichage UI.
+        logger.opt(exception=True).warning(
+            "Full scrape background failed : err={err}", err=str(e),
+        )
         _SCRAPE_STATE["error"] = str(e)
     finally:
         _SCRAPE_STATE["running"] = False
@@ -550,6 +570,7 @@ def api_scrape(
     source: str = Form(...),
     max_pages: int = Form(3, ge=1, le=30),
     use_playwright: bool = Form(False),
+    generate_batch: bool = Form(False),
 ):
     """Lance un scrape en arrière-plan.
 
@@ -557,15 +578,21 @@ def api_scrape(
     `max_pages` : 1-30 (FastAPI valide via `ge`/`le`, retourne 422 si hors borne).
     `use_playwright=True` active le fallback Playwright pour les SPAs React
     (Capgemini, Airbus, Atos, etc.) — lent (~30s par portail SPA).
-    Statut via GET /api/scrape/status.
+    `generate_batch=True` (mode 'all' uniquement) écrit en plus
+    `data/batches/{date}_to_score.json` avec les nouvelles offres pour scoring
+    LLM manuel via chat. Par défaut False — le scoring heuristique auto suffit.
+    Statut via GET /api/scrape/status (champ `batch_file` si batch généré).
     """
     from backend.scrapers.registry import list_scrapers
 
     if source.lower() == "all":
         label = "ALL (FT+WTTJ+HW+portails)" + (" + Playwright" if use_playwright else "")
         _queue_scrape_or_409(label)
-        bg.add_task(_run_full_scrape_bg, max_pages, use_playwright)
-        return {"ok": True, "source": "ALL", "max_pages": max_pages, "playwright": use_playwright}
+        bg.add_task(_run_full_scrape_bg, max_pages, use_playwright, generate_batch)
+        return {
+            "ok": True, "source": "ALL", "max_pages": max_pages,
+            "playwright": use_playwright, "generate_batch": generate_batch,
+        }
 
     available = set(list_scrapers())
     if source not in available:

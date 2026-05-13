@@ -1,19 +1,28 @@
 # Scrap'OffreEmploi — Tracker alternance AI Engineer
 
-App web locale pour scraper, scorer et suivre les offres d'alternance "AI Engineer" en France, alignées avec le programme OpenClassrooms AI Engineer.
+App web locale pour scraper, scorer et suivre les offres d'alternance "AI Engineer"
+en France, alignées avec le programme OpenClassrooms AI Engineer.
+
+**Stack** : Python 3.10+ · FastAPI · SQLite · Jinja2 · HTMX · Tailwind via CDN.
+Aucun Node.js, aucun build step, aucune clé API LLM.
 
 ## Quickstart
 
 ```powershell
-# 1. Une seule fois : créer le venv et installer
+# 1. Setup une seule fois — venv obligatoire (cf "Limitations" plus bas)
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+
+# 2. Installer les deps. Deux options :
+#    a. Versions exactes (reproductible — recommandé) :
+pip install -r requirements.lock
+#    b. Contraintes lâches (dev, peut récupérer des minor bumps) :
 pip install -r requirements.txt
 
-# 2. Migrer l'ancien xlsx vers SQLite (une seule fois)
-python -m backend.migrate_xlsx
+# 3. Migrer l'ancien xlsx vers SQLite (une seule fois)
+$env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 
-# 3. Lancer l'app
+# 4. Lancer l'app
 .\run.ps1
 # → http://localhost:8000
 ```
@@ -21,20 +30,91 @@ python -m backend.migrate_xlsx
 ## Structure
 
 ```
-backend/    Code FastAPI + Jinja + SQLite
-cli.py      Commandes : scrape, apply-scores, export-batch
-data/       SQLite + batches JSON + scrapes (gitignored)
-docs/       ARCHITECTURE.md, CRITERIA.md
-reference/  PDF du programme OC + pages PNG
-legacy/     Ancien code archivé
+backend/     Code FastAPI + Jinja + SQLite
+cli.py       Commandes : scrape, apply-scores, export-batch, check-alive
+tests/       pytest (130 tests, ~3s, sans network)
+data/        SQLite + batches JSON + scrapes (gitignored)
+docs/        ARCHITECTURE.md, CRITERIA.md (grille scoring), SOURCES.md (sites scrapés)
+reference/   PDF du programme OC + pages PNG
+legacy/      Ancien code archivé
 ```
 
-## Workflow scoring (via chat Claude)
+## Workflow scoring LLM (via chat Claude)
 
-1. Tu cliques "Scraper" dans l'app (ou `python cli.py scrape`).
-2. L'app génère `data/batches/{date}_to_score.json` avec les offres nouvelles.
-3. Dans le chat Claude : "score le dernier batch".
-4. Claude écrit `data/batches/{date}_scores.json`.
-5. Tu lances `python cli.py apply-scores` (ou bouton dans l'UI).
+Pas de clé API Anthropic dans le projet — le scoring se fait dans **ce chat** :
 
-Voir [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) et [docs/CRITERIA.md](docs/CRITERIA.md).
+1. App scrape → écrit `data/batches/{date}_to_score.json` (cocher "Générer batch
+   pour scoring LLM" lors du scrape, ou `python cli.py export-batch`).
+2. Dans le chat Claude : "score le dernier batch".
+3. Claude lit le JSON, applique la grille 5 axes /20 (cf `docs/CRITERIA.md`),
+   écrit `data/batches/{date}_scores.json`.
+4. `python cli.py apply-scores data/batches/{date}_scores.json` → DB à jour.
+
+Le scoring **heuristique automatique** (mots-clés + pénalités CDI/Senior) s'applique
+de toute façon à chaque scrape — le batch LLM est juste un raffinement optionnel.
+
+## Qualité du code
+
+```powershell
+# Tests
+$env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -q
+# → 130 passed in ~3s
+
+# Sécurité (statique)
+python -m bandit -r backend cli.py
+# → 0 issues (faux positifs B608 annotés `# nosec B608` au cas par cas)
+
+# Smoke test (import OK + nb routes)
+python -c "from backend.main import app; print('OK', len(app.routes), 'routes')"
+```
+
+## Limitations connues (usage local mono-utilisateur)
+
+Cette app est conçue pour **un usage perso en local**, pas pour la prod multi-user.
+Certains choix volontaires :
+
+- **`_SCRAPE_STATE` en RAM** : l'état du scrape en cours vit dans une variable
+  module-level. Si le serveur est tué pendant un scrape, l'état est perdu.
+  Mitigation : reset auto au startup (lifespan) + endpoint `POST /api/scrape/reset`
+  comme escape-hatch. Pour un vrai multi-process, il faudrait Redis/SQLite.
+
+- **Bind 127.0.0.1 seulement** : l'app n'écoute pas sur `0.0.0.0` — pas exposée
+  au réseau. Si tu veux la partager, mets-la derrière un reverse proxy (nginx/caddy)
+  + auth basique.
+
+- **Pas d'authentification** : les routes `POST /api/scrape/reset`,
+  `PATCH /api/offers/{id}`, `POST /api/companies/import-from-offers`, etc. sont
+  accessibles sans login. C'est OK en local (seul toi as accès à `127.0.0.1:8000`),
+  pas OK en remote. Le middleware CSRF (`CSRFOriginMiddleware`) bloque déjà les
+  requêtes mutantes depuis une origin externe.
+
+- **Tailwind vendoré localement** : le bundle Tailwind v3.4.17 est servi via
+  `backend/static/tailwind-3.4.17.min.js` avec SRI sha384. Aucune dépendance
+  réseau au runtime. HTMX 2.0.4 vient encore d'unpkg (pinné avec SRI).
+  Pour mettre à jour Tailwind :
+
+  ```powershell
+  curl -o backend/static/tailwind-<version>.min.js https://cdn.tailwindcss.com/<version>
+  python -c "import hashlib, base64; d=open('backend/static/tailwind-<version>.min.js','rb').read(); print('sha384-'+base64.b64encode(hashlib.sha384(d).digest()).decode())"
+  # → mettre à jour le src + integrity dans backend/templates/base.html
+  ```
+
+- **Credentials France Travail dans `.env`** (gitignored). Si tu publies sur
+  GitHub : vérifier que `.env` n'est PAS commité (`git ls-files | grep .env`).
+
+## MCPs (optionnels)
+
+Le projet bénéficie de 2 MCP servers configurés au user scope :
+
+- **context7** — doc à jour des libs Python (FastAPI, Pydantic, httpx, etc.)
+- **exa** — recherche web sémantique (utile pour comprendre les sites à scraper)
+
+Voir `CLAUDE.md` section "MCPs installés".
+
+## Plus de doc
+
+- `CLAUDE.md` — guide complet pour Claude Code (architecture, règles, commandes)
+- `docs/CRITERIA.md` — grille de scoring 5 axes /20
+- `docs/SOURCES.md` — sites à scraper (job boards + portails entreprise + secteurs)
+- `CHANGELOG.md` — journal des changements user-facing
+- `.claude/rules/*.md` — règles modulaires (database, routes, scrapers, templates, code-style, workflow)
