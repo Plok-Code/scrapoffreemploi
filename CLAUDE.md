@@ -31,7 +31,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 python -m backend
 # → http://localhost:8000
 
-# Tests pytest (83 tests, ~2 sec, sans network)
+# Tests pytest (256 tests, ~20 sec, sans network)
 $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -v
 
 # Logs (rotation auto 10MB, 7 fichiers gz)

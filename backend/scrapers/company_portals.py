@@ -102,9 +102,17 @@ def _fetch_workable_jobs(slug: str, company_name: str, client: httpx.Client) -> 
     try:
         r = client.get(url, headers={"Accept": "application/json"}, params={"limit": 100})
         if r.status_code != 200:
+            logger.debug(
+                "Workable HTTP {s} slug={slug} company={c}",
+                s=r.status_code, slug=slug, c=company_name,
+            )
             return []
         data = r.json()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Workable fetch KO slug={slug} company={c} err={err}",
+            slug=slug, c=company_name, err=str(e),
+        )
         return []
 
     offers: list[RawOffer] = []
@@ -139,9 +147,17 @@ def _fetch_lever_jobs(slug: str, company_name: str, client: httpx.Client) -> lis
     try:
         r = client.get(url, params={"mode": "json"}, headers={"Accept": "application/json"})
         if r.status_code != 200:
+            logger.debug(
+                "Lever HTTP {s} slug={slug} company={c}",
+                s=r.status_code, slug=slug, c=company_name,
+            )
             return []
         data = r.json()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Lever fetch KO slug={slug} company={c} err={err}",
+            slug=slug, c=company_name, err=str(e),
+        )
         return []
 
     offers: list[RawOffer] = []
@@ -181,9 +197,17 @@ def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -
     try:
         r = client.get(api_url, headers={"Accept": "application/json"})
         if r.status_code != 200:
+            logger.debug(
+                "Greenhouse HTTP {s} slug={slug} company={c}",
+                s=r.status_code, slug=slug, c=company_name,
+            )
             return []
         data = r.json()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Greenhouse fetch KO slug={slug} company={c} err={err}",
+            slug=slug, c=company_name, err=str(e),
+        )
         return []
 
     offers: list[RawOffer] = []
@@ -234,8 +258,16 @@ def _fetch_taleez_jobs(tenant: str, company_name: str, client: httpx.Client) -> 
     try:
         r = client.get(base + "/", headers={"Accept": "text/html"})
         if r.status_code != 200:
+            logger.debug(
+                "Taleez HTTP {s} tenant={t} company={c}",
+                s=r.status_code, t=tenant, c=company_name,
+            )
             return []
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Taleez fetch KO tenant={t} company={c} err={err}",
+            t=tenant, c=company_name, err=str(e),
+        )
         return []
 
     soup = BeautifulSoup(r.text, "lxml")
@@ -362,9 +394,17 @@ def _fetch_workday_jobs(url: str, company_name: str, client: httpx.Client) -> li
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         if r.status_code != 200:
+            logger.debug(
+                "Workday HTTP {s} tenant={t} site={site} company={c}",
+                s=r.status_code, t=tenant, site=site, c=company_name,
+            )
             return []
         data = r.json()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Workday fetch KO tenant={t} site={site} company={c} err={err}",
+            t=tenant, site=site, c=company_name, err=str(e),
+        )
         return []
 
     offers: list[RawOffer] = []
@@ -420,7 +460,11 @@ def _fetch_playwright_page(url: str, company_name: str) -> list[RawOffer]:
             page.wait_for_timeout(3_000)
             html = page.content()
             page.close()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Playwright page fetch KO url={u} company={c} err={err}",
+            u=url, c=company_name, err=str(e),
+        )
         return []
 
     soup = BeautifulSoup(html, "lxml")
@@ -465,8 +509,16 @@ def _fetch_generic_career_page(url: str, company_name: str, client: httpx.Client
     try:
         r = client.get(url)
         if r.status_code != 200 or len(r.text) < 1000:
+            logger.debug(
+                "Generic career page HTTP {s} len={l} url={u} company={c}",
+                s=r.status_code, l=len(r.text), u=url, c=company_name,
+            )
             return []
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug(
+            "Generic career page fetch KO url={u} company={c} err={err}",
+            u=url, c=company_name, err=str(e),
+        )
         return []
 
     soup = BeautifulSoup(r.text, "lxml")

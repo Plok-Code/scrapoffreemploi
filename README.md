@@ -32,7 +32,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 ```
 backend/     Code FastAPI + Jinja + SQLite
 cli.py       Commandes : scrape, apply-scores, export-batch, check-alive
-tests/       pytest (130 tests, ~3s, sans network)
+tests/       pytest (256 tests, ~20s, sans network)
 data/        SQLite + batches JSON + scrapes (gitignored)
 docs/        ARCHITECTURE.md, CRITERIA.md (grille scoring), SOURCES.md (sites scrapés)
 reference/   PDF du programme OC + pages PNG
@@ -58,7 +58,7 @@ de toute façon à chaque scrape — le batch LLM est juste un raffinement optio
 ```powershell
 # Tests
 $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -q
-# → 130 passed in ~3s
+# → 256 passed in ~20s
 
 # Sécurité (statique)
 python -m bandit -r backend cli.py
