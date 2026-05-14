@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 from math import ceil
 from pathlib import Path
 from threading import Lock
+from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BeforeValidator
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend import queries
@@ -21,6 +23,21 @@ from backend.models import (
     VALID_REMOTE,
     VALID_STATUSES,
 )
+
+
+def _empty_str_to_none(v: Any) -> Any:
+    """Convertit "" (chaîne vide HTML form) en None avant validation Pydantic.
+
+    Sans ça, un GET `/?min_score=` (input number vide submit) fait crasher
+    FastAPI en 422 `int_parsing` car il essaie `int("")`. Avec ce validator,
+    `""` devient `None` puis Pydantic accepte (Optional[int]).
+    """
+    return None if v == "" else v
+
+
+# Type réutilisable pour les query params int optionnels qui doivent accepter
+# la chaîne vide depuis un form HTML.
+OptionalIntFromForm = Annotated[int | None, BeforeValidator(_empty_str_to_none)]
 
 # Init du logging dès le module import (avant tout autre log)
 init_logging(level="INFO")
@@ -144,7 +161,7 @@ def page_offers(
     search: str = "",
     status: str = "",
     source: str = "",
-    min_score: int | None = None,
+    min_score: OptionalIntFromForm = None,
     only_to_apply: bool = False,
     include_archived: bool = False,
     sort: str = "score_desc",

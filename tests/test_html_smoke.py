@@ -34,6 +34,15 @@ class TestPageOffers:
         r = client.get("/?search=ML&min_score=60&sort=score_desc")
         assert r.status_code == 200
 
+    def test_get_root_with_empty_min_score(self, client):
+        """Un form HTML submit toujours `min_score=` même quand l'input est vide.
+
+        Régression catch : sans le BeforeValidator `_empty_str_to_none` sur
+        `OptionalIntFromForm`, FastAPI essaie `int("")` et 422 le request.
+        """
+        r = client.get("/?per_page=100&search=&status=&source=&min_score=&sort=date_asc")
+        assert r.status_code == 200, f"Body: {r.text[:500]}"
+
     def test_get_root_include_archived(self, client):
         r = client.get("/?include_archived=true")
         assert r.status_code == 200
