@@ -1,0 +1,145 @@
+{#
+    Composants Jinja réutilisables (badges, pagination).
+
+    Import-friendly :
+        {% from "_components.html" import score_badge, offer_status_badge,
+            priority_badge, company_status_badge, contact_method_badge,
+            paginator %}
+
+    Discipline couleurs : cf `.claude/rules/templates.md` §Palette.
+    Modifier ici se propage à toutes les pages — ne JAMAIS re-dupliquer
+    une de ces macros dans un template page (sinon divergence visuelle).
+#}
+
+
+{# --- Badges score / status / priority / contact -------------------- #}
+
+{% macro score_badge(score) -%}
+    {% if score is none %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-200 text-slate-600">—</span>
+    {% elif score >= 80 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800 font-medium">{{ score }}</span>
+    {% elif score >= 60 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800 font-medium">{{ score }}</span>
+    {% elif score >= 40 %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-orange-100 text-orange-800 font-medium">{{ score }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">{{ score }}</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{#
+    Status d'une OFFRE — utilise VALID_STATUSES de `backend/models.py`.
+    Distinct de company_status_badge car les états et leurs codes couleur
+    diffèrent (`Postulé` n'existe que sur offres, `Contacté` que sur companies).
+#}
+{% macro offer_status_badge(status) -%}
+    {% if not status %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">A postuler</span>
+    {% elif status == "Postulé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800">{{ status }}</span>
+    {% elif status == "Entretien" or status == "Test technique" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-800">{{ status }}</span>
+    {% elif status == "Accepté" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800">{{ status }}</span>
+    {% elif status == "Refusé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800">{{ status }}</span>
+    {% elif status == "Relancé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800">{{ status }}</span>
+    {% elif status == "Pas intéressé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-zinc-200 text-zinc-600 line-through">{{ status }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ status }}</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{#
+    Status d'une ENTREPRISE — utilise VALID_COMPANY_STATUSES.
+    "À contacter" est le pendant d'"A postuler" pour la candidature spontanée.
+#}
+{% macro company_status_badge(status) -%}
+    {% if not status %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">À contacter</span>
+    {% elif status == "Contacté" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800">{{ status }}</span>
+    {% elif status == "Entretien" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-800">{{ status }}</span>
+    {% elif status == "Refusé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800">{{ status }}</span>
+    {% elif status == "Relancé" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800">{{ status }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ status }}</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro priority_badge(p) -%}
+    {% if p == "Haute" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800 font-medium">{{ p }}</span>
+    {% elif p == "Moyenne" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800 font-medium">{{ p }}</span>
+    {% elif p == "Basse" %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ p }}</span>
+    {% else %}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-500">—</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{#
+    Canal de contact d'une entreprise cible (heuristique simple sur le libellé
+    pour mapper sur des pictos lisibles : Email / Portail / Spontané / LinkedIn).
+#}
+{% macro contact_method_badge(channel, email) -%}
+    {%- set channel_lower = (channel or '')|lower -%}
+    {%- if email and ('@' in email) -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✉ Email</span>
+        <a href="mailto:{{ email }}" class="text-xs text-blue-600 hover:underline ml-1">{{ email }}</a>
+    {%- elif 'portail' in channel_lower or 'workday' in channel_lower or 'taleo' in channel_lower or 'careers' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-50 text-blue-700 border border-blue-200">🔗 Portail</span>
+    {%- elif 'spontan' in channel_lower or 'cv' in channel_lower or 'physique' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-50 text-purple-700 border border-purple-200">📋 Spontané</span>
+    {%- elif 'linkedin' in channel_lower or 'talent' in channel_lower -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-cyan-50 text-cyan-700 border border-cyan-200">👥 LinkedIn/Réseau</span>
+    {%- else -%}
+        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-50 text-slate-600 border border-slate-200">{{ channel or '—' }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
+
+{# --- Pagination ---------------------------------------------------- #}
+
+{#
+    Bouton précédent/suivant + indicateur page X/Y.
+    Nommée `paginator` (pas `pagination`) pour éviter shadowing du dict
+    `pagination` du context. Préserve les query params via `request.url.include_query_params`.
+
+    Usage :
+        {{ paginator(pagination, request) }}
+#}
+{% macro paginator(pagination, request) -%}
+    {% if pagination.total_pages > 1 %}
+    <div class="px-3 py-2 border-t border-slate-200 flex items-center justify-between text-sm">
+        {% if pagination.has_prev %}
+            <a href="{{ request.url.include_query_params(page=pagination.page - 1) }}"
+               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
+                Précédent
+            </a>
+        {% else %}
+            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Précédent</span>
+        {% endif %}
+        <span class="text-slate-500">Page {{ pagination.page }} sur {{ pagination.total_pages }}</span>
+        {% if pagination.has_next %}
+            <a href="{{ request.url.include_query_params(page=pagination.page + 1) }}"
+               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
+                Suivant
+            </a>
+        {% else %}
+            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Suivant</span>
+        {% endif %}
+    </div>
+    {% endif %}
+{%- endmacro %}

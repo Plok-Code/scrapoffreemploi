@@ -12,49 +12,21 @@ Utilisé pour les sources "Career site - X" non couvertes par un scraper dédié
 """
 from __future__ import annotations
 
-import json
-import re
-
 from bs4 import BeautifulSoup
 
 from backend.scrapers._http import get_with_retry, http_client
+from backend.scrapers._jsonld import (
+    extract_jobposting_description,
+    normalize_whitespace,
+)
 from backend.scrapers.base import RawOffer, Scraper
-
-
-def _extract_jsonld_jobposting(soup: BeautifulSoup) -> str | None:
-    """Cherche un JobPosting JSON-LD et retourne la description en texte propre."""
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        candidates = data if isinstance(data, list) else [data]
-        # Aussi : @graph dans certains JSON-LD
-        for item in candidates:
-            if isinstance(item, dict) and "@graph" in item:
-                candidates.extend(item.get("@graph", []))
-        for item in candidates:
-            if not isinstance(item, dict):
-                continue
-            if item.get("@type") != "JobPosting":
-                continue
-            desc_html = item.get("description", "")
-            if not desc_html:
-                continue
-            inner = BeautifulSoup(desc_html, "lxml")
-            text = inner.get_text(separator="\n", strip=True)
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            if len(text) > 200:
-                return text
-    return None
 
 
 def _extract_microdata(soup: BeautifulSoup) -> str | None:
     """Schema.org microdata : `itemprop="description"`."""
     el = soup.select_one('[itemprop="description"]')
     if el:
-        text = el.get_text(separator="\n", strip=True)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = normalize_whitespace(el.get_text(separator="\n", strip=True))
         if len(text) > 200:
             return text
     return None
@@ -73,8 +45,7 @@ def _extract_by_attribute(soup: BeautifulSoup) -> str | None:
     ):
         el = soup.select_one(sel)
         if el:
-            text = el.get_text(separator="\n", strip=True)
-            text = re.sub(r"\n{3,}", "\n\n", text)
+            text = normalize_whitespace(el.get_text(separator="\n", strip=True))
             if len(text) > 200:
                 return text
     return None
@@ -85,8 +56,7 @@ def _extract_main(soup: BeautifulSoup) -> str | None:
     for sel in ("main", "article"):
         el = soup.select_one(sel)
         if el:
-            text = el.get_text(separator="\n", strip=True)
-            text = re.sub(r"\n{3,}", "\n\n", text)
+            text = normalize_whitespace(el.get_text(separator="\n", strip=True))
             if len(text) > 500:  # exigence plus forte pour limiter le bruit
                 return text
     return None
@@ -111,7 +81,7 @@ class GenericScraper(Scraper):
             soup = BeautifulSoup(resp.text, "lxml")
 
         for extractor in (
-            _extract_jsonld_jobposting,
+            extract_jobposting_description,
             _extract_microdata,
             _extract_by_attribute,
             _extract_main,

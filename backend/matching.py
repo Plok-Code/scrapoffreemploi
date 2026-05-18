@@ -220,8 +220,9 @@ def is_batch_applied(batch_path: Path) -> bool:
     offer_ids = [o.get("id") for o in offers if isinstance(o.get("id"), int)]
     if not offer_ids:
         return True  # batch vide = rien à scorer
-    # `placeholders` est uniquement composé de `?` (un par offer_id) — les
-    # valeurs partent via le 2e arg de execute().
+    # SAFE (B608) : `placeholders` est uniquement composé de `?` (un par
+    # offer_id) — généré depuis la LONGUEUR de la liste, pas son contenu.
+    # Les ids partent via le 2e arg de execute() (params positionnels).
     placeholders = ",".join("?" * len(offer_ids))
     sql = (
         f"SELECT COUNT(*) AS unscored FROM offers "  # nosec B608

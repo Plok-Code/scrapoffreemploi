@@ -6,6 +6,396 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Docs — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.6 (rationale `# nosec B608`)
+
+Les 12 occurrences de `# nosec B608` (f-string SQL) avaient déjà un commentaire
+au-dessus expliquant pourquoi c'était safe, mais le format variait
+(`pas d'input user`, `fragments littéraux`, `passe via ?`...). Uniformisation
+pour qu'un grep `nosec` puisse être audité en passant rapide.
+
+- **Tous les `# nosec B608` ouvrent maintenant par `# SAFE (B608) :`** suivi
+  de 2-4 lignes qui explicitent :
+  - **Quoi** est interpolé dans le f-string (fragment littéral, placeholder
+    généré à partir d'une longueur, nom de colonne d'une whitelist).
+  - **Pourquoi** ce n'est pas un input user (constante module-level,
+    if/else interne, whitelist `ALLOWED_*_FIELDS`, cast `int()`).
+  - **Comment** les valeurs réelles sont bindées (params positionnels `?`,
+    params nommés `:name`, cast int explicite).
+
+Fichiers touchés (uniformisation uniquement, aucun changement SQL) :
+- `backend/queries.py` (4 occurrences : `delete_offers_bulk`, `update_offer`,
+  `count_other_haute`, `update_target_company`).
+- `backend/heuristic_scorer.py` (1 occurrence).
+- `backend/matching.py` (3 occurrences).
+- `backend/scrapers/runner.py` (3 occurrences : `enrich_descriptions`,
+  `check_alive`, `cleanup_dead_unstatused`).
+- `backend/scrapers/company_portals.py` (1 occurrence).
+- `backend/seed_high_priority_other_cities.py` (1 occurrence).
+
+Validation :
+- `pytest tests/ -q` : 365 passed in 26.50s (aucune régression — c'est du
+  commentaire uniquement).
+- `bandit -r backend cli.py` : **0 issues, exit 0** (les warnings bandit
+  "nosec encountered but no failed test" sur runner.py:186/429/548 sont
+  bénins — c'est bandit qui signale que le marqueur est conservé sur des
+  lignes qu'il ne flaggerait plus, sans rien faire échouer).
+
+### Changed — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.5 (accessibilité)
+
+Quick wins a11y identifiés par l'audit UI : boutons emoji sans `aria-label`,
+polling scrape-status sans `aria-live`, focus visible sur actions critiques.
+Scope perso/local : pas de full WCAG AA mais hygiène raisonnable.
+
+- **`backend/templates/offers.html`** : boutons inline "Pas intéressé" 👎 et
+  "Remettre" ↩️
+  - `aria-label="Remettre cette offre dans À postuler"` /
+    `aria-label="Marquer cette offre comme pas intéressé"` (lisible par
+    lecteur d'écran indépendamment du contexte de la ligne).
+  - `<span aria-hidden="true">👎</span>` : l'emoji n'est pas annoncé en
+    double, le `<span class="sr-only">Pas intéressé</span>` à côté l'est.
+  - `focus-visible:outline ... outline-rose-700` : focus visible navigation
+    clavier (Tab).
+
+- **`backend/templates/base.html`** : div `#scrape-status` (polling 3s)
+  - `role="status"` + `aria-live="polite"` + `aria-atomic="true"` : les
+    lecteurs d'écran annoncent les changements de statut (`⏳ scrape en
+    cours`, `✅ terminé`, `❌ erreur`) sans interrompre l'utilisateur.
+
+- **`backend/static/style.css`** : classe utilitaire `.sr-only` ajoutée
+  (Tailwind CDN génère cette classe à la volée, mais on la définit aussi
+  côté CSS pour garantir le rendu même quand l'utilitaire JIT rate un
+  `<span>` imbriqué).
+
+Trade-off documenté : les `<label>` des inputs filtres ne sont pas tous
+associés via `for="..."` / `id="..."`. Sur un app single-user FR avec
+clavier français standard, le bénéfice incrémental d'associer 20+ inputs
+est faible vs la churn. Si l'app évolue vers du multi-user / public, ce
+serait un P0 a11y à reprendre.
+
+Validation :
+- `pytest tests/ -q` : 365 passed in 26.94s (aucune régression).
+- E2E live : `GET /` rendu confirme `aria-live="polite"` sur
+  `#scrape-status` et `aria-label="Marquer cette offre comme pas..."` sur
+  les boutons 👎.
+
+### Added — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.4 (tests parsing scrapers)
+
+Le parsing est la partie la plus fragile du scraping (régression invisible
+si la source change sa structure DOM ou ses noms de champs JSON). Aucune
+fonction d'extraction (`_parse_card` HW, `_hit_to_raw` WTTJ, `_parse_offer`
+FT) n'avait de test dédié — le seul filet était les tests de filtre
+alternance et keywords, qui ne couvrent pas le mapping champ-par-champ.
+
+- **`tests/test_scrapers_parse.py`** : 20 tests (~0.5 sec), 3 classes :
+
+  - **`TestHelloWorkParseCard`** (4 cas) : DOM card complète (titre +
+    entreprise + ville + département + contract + salary depuis aria-label),
+    sans département, minimal (titre seul), card cassée sans lien → None
+    silencieux.
+
+  - **`TestHelloWorkParseAriaLabel`** (3 cas) : la regex aria-label que
+    l'audit a flaggé comme fragile. Full aria avec 5 segments, sans salaire,
+    avec uniquement la ville.
+
+  - **`TestWTTJHitToRaw`** (6 cas) : mapping Algolia hit typique,
+    **garde-fou `offices` (pluriel) vs `office` (singulier)** — verrouille la
+    régression historique fixée en mai, hit sans titre → None, HTML strippé
+    dans description, < 100 chars → description=None (le caller fait
+    `fetch_detail` pour enrichir), URL `None` si slugs manquants.
+
+  - **`TestFranceTravailParseOffer`** (7 cas) : mapping `natureContrat`
+    E1 → "Alternance (apprentissage)" et E2 → "Alternance (professionnalisation)",
+    fallback sur `typeContratLibelle` puis "Alternance" par défaut, URL
+    canonique générée quand `origineOffre.urlOrigine` absent, date tronquée
+    à 10 chars (YYYY-MM-DD), tous champs optionnels vides ne crashent pas.
+
+  - Toutes les fixtures sont des **dicts Python construits** sur la base de
+    la structure réelle observée — zéro network, zéro fichier externe.
+    Les RawOffer retournés sont validés via leurs assertions Pydantic
+    automatiques (URL scheme, date format).
+
+Validation :
+- `pytest tests/test_scrapers_parse.py -v` : 20 passed in 0.52s.
+- `pytest tests/ -q` : 365 passed in 26.78s (345 → 365 = +20).
+- Aucun appel réseau, aucune fixture HTML/JSON externe.
+
+### Changed — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.3 (`get_stats` single query)
+
+`queries.get_stats()` faisait 9 `SELECT COUNT(*)` séquentiels sur la table
+`offers` à chaque rendu de la page d'accueil (10 réellement, dont 1 pour
+`archived`). Pas critique en perf au volume actuel (~1200 lignes), mais :
+- 10 scans de table au lieu de 1 = ~10× plus lent.
+- Plus de surface à maintenir si on ajoute un compteur.
+- Pattern qu'un staff-engineer voit immédiatement comme "factorisable".
+
+- **`backend/queries.py:get_stats()`** : remplacé par une **seule requête**
+  avec `SUM(CASE WHEN cond THEN 1 ELSE 0 END)` pour chacun des 10 compteurs.
+  Toutes les conditions restent des littéraux SQL constants (pas d'input
+  user, donc toujours bandit-clean sans `# nosec`). Le retour reste un dict
+  avec exactement les mêmes clefs et la même sémantique. `SUM(0 rows)`
+  retourne NULL en SQLite → coercion `int(row[k] or 0)` pour stabilité.
+
+Validation :
+- `pytest tests/ -q` : 345 passed in 27.35s (aucune régression).
+- E2E live : `GET /api/stats` retourne strictement les mêmes valeurs
+  qu'avant le refactor sur la DB de prod (1189 offres) :
+  `{"total":1189,"to_apply":1115,"applied":35,"interviews":0,"refused":5,
+    "top_fit":5,"bon_fit":170,"unscored":0,"not_interested":34,"archived":18}`.
+
+### Refactored — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.2 (helper `_jsonld.py`)
+
+Le parsing JSON-LD `JobPosting` (Schema.org) était implémenté **3 fois** dans
+les scrapers avec **3 niveaux de complétude** différents :
+- `_generic.py` gérait `dict` / `list` / `@graph` (le plus complet)
+- `wttj.py` gérait `dict` / `list` (pas `@graph`)
+- `hellowork.py` gérait uniquement `dict` (le plus simple, ratait les ATS
+  modernes qui sérialisent en liste)
+
+Le risque : un site dont l'ATS sérialise en `@graph` ratait son extraction
+sur HelloWork mais pas sur Generic — comportement incohérent par source.
+
+- **`backend/scrapers/_jsonld.py`** (nouveau) : helper canonique
+  - `extract_jobposting_description(soup, *, min_len=200) -> str | None`
+    qui gère les 3 formats (`dict`, `list`, `@graph`) via `_iter_jsonld_objects`.
+  - `normalize_whitespace(text)` : collapse 3+ newlines → 2 (anciennement
+    `re.sub(r"\n{3,}", "\n\n", text)` dupliqué 5+ fois dans la codebase).
+  - `min_len` paramétrable (utile pour les tests, mais défaut 200 préservé).
+
+- **`backend/scrapers/_generic.py`** : `_extract_jsonld_jobposting` supprimé,
+  `extract_jobposting_description` utilisé. Imports `json` et `re` retirés.
+  `normalize_whitespace` utilisé dans `_extract_microdata`,
+  `_extract_by_attribute`, `_extract_main`.
+
+- **`backend/scrapers/hellowork.py`** : `fetch_detail` upgrade — gère maintenant
+  `list` et `@graph` (bug corrigé indirectement). `import json as _json` retiré.
+
+- **`backend/scrapers/wttj.py`** : idem `fetch_detail` factorisé.
+  `import json` et `import re` retirés (plus utilisés).
+
+- **`tests/test_jsonld_helper.py`** : 17 tests (~0.3 sec)
+  - **`TestNormalizeWhitespace`** (4 cas) : collapse 3/5+ newlines → 2,
+    préserve 2 et 1, no-op sans newline.
+  - **`TestExtractJobPostingDict`** (4 cas) : extraction dict simple, None
+    sur `@type: Organization`, None sur description trop courte, `min_len`
+    paramétrable.
+  - **`TestExtractJobPostingList`** (2 cas) : extraction depuis liste de
+    JSON-LD, premier match wins.
+  - **`TestExtractJobPostingGraph`** (1 cas) : extraction depuis `@graph`
+    imbriqué (format Workday-like).
+  - **`TestRobustness`** (6 cas) : JSON malformé / script vide / array de
+    primitives / pas de `<script>` / `description: ""` / HTML tags strippés.
+
+Validation :
+- `pytest tests/test_jsonld_helper.py -v` : 17 passed in 0.30s.
+- `pytest tests/ -q` : 345 passed in 26.83s (328 → 345 = +17).
+- Comportement scrapers strictement préservé sur les 3 formats antérieurs ;
+  HelloWork et WTTJ gèrent maintenant `@graph` (gain net).
+
+### Refactored — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.1 (templates `_components.html`)
+
+Les macros badge (`score_badge`, `status_badge`, `priority_badge`,
+`contact_method_badge`) et le bloc pagination étaient **dupliqués** entre
+`offers.html` et `companies.html`. Une modif de couleur ou de wording
+devait être faite à 2 endroits — facile d'oublier l'un des deux et avoir
+des badges incohérents entre les 2 pages.
+
+- **`backend/templates/_components.html`** (nouveau) : 6 macros centralisées
+  - `score_badge(score)` : palette emerald/yellow/orange/slate selon labels
+    Top/Bon/Moyen/Faible.
+  - `offer_status_badge(status)` : mapping `VALID_STATUSES` → couleur
+    (Postulé=blue, Entretien/Test=purple, Accepté=emerald, Refusé=rose,
+    Relancé=amber, Pas intéressé=zinc line-through).
+  - `company_status_badge(status)` : mapping `VALID_COMPANY_STATUSES`
+    (couleurs distinctes — pas d'état `Postulé` pour une entreprise).
+  - `priority_badge(p)` : Haute=rose, Moyenne=amber, Basse=slate.
+  - `contact_method_badge(channel, email)` : heuristique sur le libellé pour
+    afficher ✉ Email / 🔗 Portail / 📋 Spontané / 👥 LinkedIn.
+  - `paginator(pagination, request)` : renommé (pas `pagination` pour
+    éviter le shadowing du dict du context).
+
+- **`backend/templates/offers.html`** : 35 lignes de macros → 1 ligne d'import
+  `{% from "_components.html" import score_badge, offer_status_badge, paginator %}`.
+  Bloc pagination 20 lignes → `{{ paginator(pagination, request) }}`.
+
+- **`backend/templates/companies.html`** : 45 lignes de macros + 20 lignes
+  pagination → 2 lignes d'import + 1 appel paginator.
+
+Validation :
+- `pytest tests/ -q` : 328 passed in 25.73s (aucune régression).
+- E2E navigation Chrome : `/?min_score=60&page=2` et `/companies?priority=Haute&page=2`
+  rendent identiquement (badges colorés intacts, pagination "page 2/7" et "page 2/3"
+  préservée).
+- Bilan : ~85 lignes de templates supprimées, source-of-truth unique.
+
+### Fixed + Added — Sprint qualité (18 mai 2026) : audit staff-engineer — P0.5 (FT token 401 retry)
+
+Le scraper France Travail avait 2 trous sur le refresh token :
+
+1. **`fetch_list` skippait la page sur 401** : sur réception d'un 401 mid-scrape,
+   le code invalidait `_TOKEN_CACHE`, refresh le token, puis faisait `continue`
+   — mais `continue` dans `for page in range(max_pages):` passe à la PAGE
+   SUIVANTE, pas à un retry de la même page. Conséquence : les offres de la
+   page 401'd étaient perdues silencieusement.
+
+2. **`fetch_detail` n'avait aucun handling 401** : sur token révoqué, retournait
+   simplement `None` (description manquante, sans log).
+
+- **`backend/scrapers/francetravail.py`** : nouveau helper
+  `_request_with_token_retry(client, method, url, *, auth_headers, params, max_token_retries=1)` qui :
+  - exécute la requête,
+  - sur 401, invalide `_TOKEN_CACHE["expires_at"] = 0.0`, force `_get_token`,
+    met à jour `auth_headers["Authorization"]` **in-place** (les requêtes
+    ultérieures du caller héritent du nouveau Bearer),
+  - **rejoue la MÊME requête** (jamais skipper la page).
+  - Limite à 1 retry — au-delà = creds KO/client révoqué, `logger.error` +
+    fail fast.
+  - `fetch_list` et `fetch_detail` utilisent maintenant ce helper.
+
+- **`tests/test_francetravail_token_retry.py`** : 6 tests (~0.3 sec) via
+  `httpx.MockTransport` (idiomatique httpx, zéro network).
+  - 200 → pas de retry (1 seule requête vue, header inchangé).
+  - 401 puis 200 → 2 requêtes, 2e avec nouveau Bearer, `headers` in-place
+    mis à jour.
+  - 401 puis 401 → pas de 3e tentative, retourne le dernier 401.
+  - `_TOKEN_CACHE["expires_at"]` repassé à 0.0 sur 401 (force refresh même
+    si cache était "valide encore 1h").
+  - 500/503/429/204 → pas de retry token (autres handlers).
+  - Query params bien passés à la requête réelle.
+  - Fixture `autouse=True` reset le cache global entre chaque test (state
+    isolation propre).
+
+Validation :
+- `pytest tests/test_francetravail_token_retry.py -v` : 6 passed in 0.30s.
+- `pytest tests/ -q` : 328 passed in 25.99s (322 → 328 = +6).
+- Aucune régression. Comportement nominal (200) strictement identique.
+
+### Changed — Sprint qualité (18 mai 2026) : audit staff-engineer — P0.4 (bulk transactions cycle de vie)
+
+`cleanup_dead_unstatused` et `check_alive` faisaient N transactions SQLite
+(une par offre) sur des batchs typiques de 1000+ URLs : ~5-15 sec perdues sur
+les commits WAL, et **atomicité faible** (Ctrl+C / kill uvicorn au milieu →
+500 offres mises à jour, 500 non, état incohérent côté UI "Inclure archivées").
+
+- **`backend/queries.py`** : 2 nouvelles fonctions
+  - `set_alive_state_bulk(updates: list[tuple[int, bool]]) -> int` : 1 seul
+    `executemany` UPDATE `is_active` + stamp `last_checked_at`.
+  - `delete_offers_bulk(ids: list[int]) -> int` : 1 seul DELETE avec
+    placeholders dynamiques `id IN (?,?,?,...)`, `# nosec B608` documenté
+    (placeholders générés à partir de `len(ids)`, pas du contenu).
+
+- **`backend/scrapers/runner.py`** : refactor des 2 fonctions de cycle de vie
+  - Les verdicts (`archived_ids`, `revived_ids`, `to_delete`, `to_archive`,
+    `to_revive`) sont **collectés en RAM** pendant la boucle HTTP.
+  - Le flush DB se fait en **2-3 transactions bulk** à la fin via les helpers.
+  - Atomicité : Ctrl+C au milieu = 0 write (idempotent au prochain run).
+  - Perf : ~10× plus rapide qu'un commit par URL.
+  - Comportement fonctionnel **inchangé** : `CleanupResult` et
+    `AliveCheckResult` retournent les mêmes compteurs.
+
+- **`tests/test_bulk_alive.py`** : 11 nouveaux tests (~2.4 sec)
+  - `TestSetAliveStateBulk` (5 cas) : empty list, archive bulk, revive bulk,
+    mixed archive/revive dans un seul appel, ids inconnus → no exception.
+  - `TestDeleteOffersBulk` (4 cas) : empty, delete partiel, ids non listés
+    préservés, volume 50 offres.
+  - `TestRunnerIntegration` (2 cas) : `monkeypatch` sur
+    `_probe_workday_api` + sur `queries.set_alive_state_bulk` pour vérifier
+    que `check_alive` et `cleanup_dead_unstatused` font UN seul appel bulk
+    pour 3 offres au lieu de 3 appels individuels.
+
+Validation :
+- `pytest tests/test_bulk_alive.py -v` : 11 passed in 2.35s.
+- `pytest tests/ -q` : 322 passed in 26.31s (311 → 322 = +11).
+- Aucune régression. Comportement fonctionnel strictement identique.
+
+### Added — Sprint qualité (18 mai 2026) : audit staff-engineer — P0.3 (tests routes HTTP)
+
+Les routes HTTP n'étaient validées que par des smoke tests "200 + contient
+'Scrap'Offre Emploi'" (`test_html_smoke.py`). Aucune assertion sur le
+contenu rendu (filtres, pagination, tri), aucun test sur `/api/scrape`
+concurrence ni structure de `/api/scrape/status`. Régression facile sur
+`queries._offer_filters` ou `OptionalIntFromForm` passait inaperçue.
+
+- **`tests/test_routes.py`** : 27 nouveaux tests (~4.4 sec). Découpés en
+  6 sections :
+  - **Filtres GET /** (7 tests) : `search` (titre + entreprise case-insensitive),
+    `min_score` (seuil), `status` (valeur explicite + sentinelle `_NONE_`),
+    `include_archived` (hidden par défaut + visible avec flag). Assert
+    présence/absence des lignes dans le HTML.
+  - **Pagination** (5 tests) : `page=2` retourne le bon slice, `page=999`
+    normalisé à la dernière, `per_page < 25` et `per_page > 500` → 422
+    (validation FastAPI `Query(ge=25, le=500)`), `page=0` → 422.
+  - **POST /offers/{id}** (3 tests) : redirect 303 avec `Location: /offers/{id}`,
+    persistance des champs `status` + `notes`, 404 sur id inexistant.
+  - **/api/scrape** (5 tests) : 400 sur source inconnue, **409 sur double-POST**
+    (via `monkeypatch.setitem(_SCRAPE_STATE, 'running', True)`), 422 sur
+    `max_pages` hors borne, structure du status (8 clefs minimum), reset.
+  - **API JSON** (5 tests) : `/api/stats` structure complète (10 clefs),
+    PATCH `/api/offers/{id}` succès `{"ok": True}` + 404, POST toggle
+    `/api/offers/{id}/status` "Pas intéressé" + reset à NULL via `status=""`.
+  - **POST /api/companies/import-from-offers** (2 tests) : dict structuré
+    `{city, candidates, inserted, skipped_dup}`, 0 sur ville inexistante.
+
+Validation :
+- `pytest tests/test_routes.py -v` : 27 passed in 4.44s.
+- `pytest tests/ -q` : 311 passed in 23.65s (284 → 311 = +27).
+- Aucune régression sur les 284 tests pré-existants.
+
+### Added — Sprint qualité (18 mai 2026) : audit staff-engineer — P0.2 (tests heuristic_scorer)
+
+Le scoreur heuristique (`backend.heuristic_scorer`) classe automatiquement les
+~1100 offres scrapées avec un système de regex (mots-clés par axe + bonus +
+pénalités + must-have alternance + normalisation finale). Zéro test
+jusqu'ici : une régression sur `_AXIS_KEYWORDS`, `_PENALTIES`, `_BONUSES` ou
+la passe de normalisation finale aurait pu basculer toute la distribution
+silencieusement. C'est traité.
+
+- **`tests/test_heuristic_scorer.py`** : 27 nouveaux tests (~1.1 sec) couvrant
+  4 classes :
+  - **`TestInvariants`** (10 cas paramétrisés) : `total ∈ [0, 100]`, chaque
+    axe `∈ [0, 20]`, `total == sum(axes)` (contrat avec `apply_llm_scores`),
+    pas de `ZeroDivisionError` quand aucun mot-clé ne matche.
+  - **`TestPenaltiesAndBonuses`** : must-have alternance (-25), pénalité
+    Senior, pénalité Tech Lead, bonus "alternant" explicite, pénalité
+    Directeur. Comparaison relative (texte A vs texte A+keyword) plutôt
+    qu'assertion exacte → résistant aux ajustements de poids.
+  - **`TestAxisAttribution`** : mots-clés pipeline → axe pipeline (pas de
+    leak), idem modélisation et déploiement, et stuffing MLOps → axe
+    déploiement capé à 20.
+  - **`TestReturnShape`** : dataclass `HeuristicResult` stable (offer_id=0
+    par défaut, `matched: list`), contrat de structure.
+  - **`TestApplyHeuristicToUnscored`** : intégration DB via temp fixture
+    (`monkeypatch.setattr("backend.db.DB_PATH", tmp_path)`). Vérifie filtre
+    unscored par défaut, mode `rescore_heuristic=True` n'écrase QUE les
+    `auto:heuristic%` (jamais les scores manuels), filtrage des archived,
+    structure du dict de retour, DB vide → zéro.
+
+Validation :
+- `pytest tests/test_heuristic_scorer.py -v` : 27 passed in 1.10s.
+- `pytest tests/ -q` : 284 passed in 20.94s (256 → 284 = +28 nouveaux —
+  un fichier de test_html_smoke contient 1 test supplémentaire détecté).
+- Aucune régression sur les tests existants.
+
+### Changed — Sprint qualité (18 mai 2026) : audit staff-engineer — P0.1 (HTMX vendoré local)
+
+Aligné sur la Vague 2 (Tailwind local) : **HTMX 2.0.4 est désormais servi
+depuis `backend/static/`**, plus aucune dépendance CDN runtime. L'app reste
+fonctionnelle hors-ligne / mode avion / firewall corporate.
+
+- **`backend/static/htmx-2.0.4.min.js`** (50 917 octets) : bundle officiel
+  unpkg téléchargé en local. Byte-identique au CDN — SRI inchangée :
+  `sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+`.
+- **`backend/templates/base.html`** : `<script src="https://unpkg.com/...">`
+  remplacé par `<script src="/static/htmx-2.0.4.min.js" integrity="..."
+  crossorigin="anonymous">`.
+- **`.claude/rules/templates.md`** : doc mise à jour ("HTMX 2.0 via CDN" →
+  "HTMX 2.0.4 vendored local"), commande de mise à jour documentée.
+
+Validation :
+- `pytest tests/test_html_smoke.py tests/test_security.py -q` : 38 passed in 3.18s.
+- E2E : `GET /` ne contient plus aucune référence à `unpkg`,
+  `GET /static/htmx-2.0.4.min.js` répond 200 (50 917 octets).
+- Aucune SRI failure dans Chrome DevTools.
+
 ### Added — Sprint qualité (14 mai 2026) : audit GPT — Vague 4 (CHECK constraints DB)
 
 Le point « contraintes DB faibles » de l'audit GPT est traité : les enums

@@ -113,6 +113,44 @@ def _get_token(client: httpx.Client) -> str:
     return token
 
 
+def _request_with_token_retry(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    auth_headers: dict[str, str],
+    params: dict | None = None,
+    max_token_retries: int = 1,
+) -> httpx.Response:
+    """Exécute une requête API FT avec refresh auto du token sur 401.
+
+    Le cache `_TOKEN_CACHE` peut périmer côté serveur FT (rotation, abuse
+    detection, révocation manuelle) avant l'`expires_at` calculé localement.
+    Sur 401, on invalide le cache, on obtient un nouveau token et on **rejoue
+    la même requête** (1 retry max — au-delà, c'est probablement un problème
+    de credentials, fail fast).
+
+    Modifie `auth_headers["Authorization"]` in-place avec le nouveau Bearer
+    pour que le caller continue d'utiliser un header à jour sur les requêtes
+    suivantes.
+    """
+    last_resp = None
+    for attempt in range(max_token_retries + 1):
+        last_resp = client.request(method, url, headers=auth_headers, params=params)
+        if last_resp.status_code != 401:
+            return last_resp
+        if attempt >= max_token_retries:
+            break
+        logger.warning(
+            "FT 401 reçu sur {u} — refresh token + retry ({a}/{m})",
+            u=url, a=attempt + 1, m=max_token_retries,
+        )
+        _TOKEN_CACHE["expires_at"] = 0.0
+        new_token = _get_token(client)
+        auth_headers["Authorization"] = f"Bearer {new_token}"
+    return last_resp  # 401 final après retries
+
+
 # --- Mapping JSON → RawOffer ---
 
 def _parse_offer(item: dict) -> RawOffer:
@@ -209,9 +247,14 @@ class FranceTravailScraper(Scraper):
                         time.sleep(_MIN_INTERVAL_S - elapsed)
 
                     try:
-                        resp = client.get(
+                        # `_request_with_token_retry` gère le 401 → refresh +
+                        # retry de la MÊME requête (bug fix : l'ancien
+                        # `continue` skippait la page après refresh).
+                        resp = _request_with_token_retry(
+                            client,
+                            "GET",
                             SEARCH_URL,
-                            headers=auth_headers,
+                            auth_headers=auth_headers,
                             params={
                                 "motsCles": kw,
                                 "natureContrat": f"{NATURE_APPRENTISSAGE},{NATURE_PROFESSIONNALISATION}",
@@ -224,11 +267,12 @@ class FranceTravailScraper(Scraper):
                     last_call = time.time()
 
                     if resp.status_code == 401:
-                        # Token expiré en cours de session → on force un refresh
-                        _TOKEN_CACHE["expires_at"] = 0.0
-                        token = _get_token(client)
-                        auth_headers["Authorization"] = f"Bearer {token}"
-                        continue
+                        # 401 persistant après refresh = credentials KO ou
+                        # client révoqué côté FT. Fail fast pour ce mot-clé.
+                        logger.error(
+                            "FT 401 persistant après refresh — abandon kw={kw}", kw=kw,
+                        )
+                        break
                     if resp.status_code not in (200, 206):
                         # 204 = no content, autres = erreur. On passe au mot-clé suivant.
                         break
@@ -260,15 +304,22 @@ class FranceTravailScraper(Scraper):
         """Récupère la description complète d'une offre via l'API détail.
 
         Extrait l'ID FT depuis l'URL (suffixe de l'URL candidat) puis hit l'API.
+        Token refresh + retry sur 401 (cf `_request_with_token_retry`).
         """
         offer_id = _extract_ft_id(url)
         if not offer_id:
             return None
         with httpx.Client(timeout=httpx.Timeout(20.0, connect=8.0)) as client:
             token = _get_token(client)
-            resp = client.get(
+            auth_headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            }
+            resp = _request_with_token_retry(
+                client,
+                "GET",
                 DETAIL_URL.format(id=offer_id),
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                auth_headers=auth_headers,
             )
             if resp.status_code != 200:
                 return None

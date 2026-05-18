@@ -24,11 +24,11 @@ EXCLUDED_CITY_PATTERNS = ["toulouse", "bordeaux", "pau", "paris", "nancy"]
 
 def fetch_high_priority_other_cities(*, min_score: int = MIN_SCORE_HIGH_PRIORITY) -> list[dict]:
     """Retourne les couples (entreprise, ville) avec offres ≥ min_score, hors-5-villes."""
-    # `exclusions` est construit depuis la constante EXCLUDED_CITY_PATTERNS
-    # (liste hardcodée module-level). Les valeurs des villes passent via params
-    # nommés `:ex{i}` (jamais concaténées dans le SQL). On utilise .format()
-    # sur un template constant pour garder le multi-line lisible ET permettre
-    # le marqueur de skip B608 sur une seule ligne.
+    # SAFE (B608) : `exclusions` est généré depuis la LONGUEUR de la constante
+    # module-level `EXCLUDED_CITY_PATTERNS` — uniquement des fragments SQL
+    # littéraux "LOWER(city) NOT LIKE :exN". Les valeurs des villes partent
+    # via params nommés `:ex{i}` (jamais concaténées dans le SQL). `.format()`
+    # sert juste à interpoler les exclusions dans le template SQL multi-line.
     exclusions = " AND ".join(f"LOWER(city) NOT LIKE :ex{i}" for i in range(len(EXCLUDED_CITY_PATTERNS)))
     sql_template = """
         SELECT

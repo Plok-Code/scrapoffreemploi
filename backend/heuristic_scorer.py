@@ -230,8 +230,9 @@ def apply_heuristic_to_unscored(
             match_score IS NULL
             AND (is_active IS NULL OR is_active = 1)
         """
-    # `where` est une string littérale constante (if/else interne) et `limit`
-    # passe par `int()`. Pas d'input user dans le SQL.
+    # SAFE (B608) : `where` est l'une des 2 chaînes littérales du if/else
+    # ci-dessus (pas d'input user dans l'une ou l'autre branche). `limit`
+    # est cast int() avant interpolation — sqlite3 ne peut pas être injecté.
     sql = f"SELECT id, title, description FROM offers WHERE {where} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"

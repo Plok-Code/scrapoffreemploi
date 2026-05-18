@@ -1,39 +1,6 @@
 {% extends "base.html" %}
+{% from "_components.html" import score_badge, offer_status_badge, paginator %}
 {% block title %}Offres — Scrap'Offre Emploi{% endblock %}
-
-{% macro score_badge(score) -%}
-    {% if score is none %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-200 text-slate-600">—</span>
-    {% elif score >= 80 %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800 font-medium">{{ score }}</span>
-    {% elif score >= 60 %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800 font-medium">{{ score }}</span>
-    {% elif score >= 40 %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-orange-100 text-orange-800 font-medium">{{ score }}</span>
-    {% else %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">{{ score }}</span>
-    {% endif %}
-{%- endmacro %}
-
-{% macro status_badge(status) -%}
-    {% if not status %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-600">A postuler</span>
-    {% elif status == "Postulé" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-blue-100 text-blue-800">{{ status }}</span>
-    {% elif status == "Entretien" or status == "Test technique" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-800">{{ status }}</span>
-    {% elif status == "Accepté" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-800">{{ status }}</span>
-    {% elif status == "Refusé" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-rose-100 text-rose-800">{{ status }}</span>
-    {% elif status == "Relancé" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-800">{{ status }}</span>
-    {% elif status == "Pas intéressé" %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-zinc-200 text-zinc-600 line-through">{{ status }}</span>
-    {% else %}
-        <span class="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">{{ status }}</span>
-    {% endif %}
-{%- endmacro %}
 
 {% block content %}
 <!-- Stats -->
@@ -165,7 +132,7 @@
                 </td>
                 <td class="px-3 py-2 text-slate-600 text-xs">{{ o.source or "—" }}</td>
                 <td class="px-3 py-2 text-slate-500 text-xs">{{ o.date_published or "—" }}</td>
-                <td class="px-3 py-2">{{ status_badge(o.status) }}</td>
+                <td class="px-3 py-2">{{ offer_status_badge(o.status) }}</td>
                 <td class="px-3 py-2">
                     <div class="flex items-center gap-1.5">
                         {% if o.url %}
@@ -175,22 +142,25 @@
                         {% if o.status == "Pas intéressé" %}
                             <button type="button"
                                     title="Annuler 'Pas intéressé' (remettre dans À postuler)"
+                                    aria-label="Remettre cette offre dans À postuler"
                                     hx-post="/api/offers/{{ o.id }}/status"
                                     hx-vals='{"status": ""}'
                                     hx-swap="none"
                                     hx-on::after-request="if(event.detail.successful) window.location.reload();"
-                                    class="text-xs text-slate-500 hover:text-slate-900">
-                                ↩️ Remettre
+                                    class="text-xs text-slate-500 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900">
+                                <span aria-hidden="true">↩️</span> Remettre
                             </button>
                         {% elif not o.status %}
                             <button type="button"
                                     title="Marquer 'Pas intéressé' (ne plus afficher dans À postuler)"
+                                    aria-label="Marquer cette offre comme pas intéressé"
                                     hx-post="/api/offers/{{ o.id }}/status"
                                     hx-vals='{"status": "Pas intéressé"}'
                                     hx-swap="none"
                                     hx-on::after-request="if(event.detail.successful) document.getElementById('offer-row-{{ o.id }}').remove();"
-                                    class="text-xs text-slate-400 hover:text-rose-700">
-                                👎
+                                    class="text-xs text-slate-400 hover:text-rose-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-700">
+                                <span aria-hidden="true">👎</span>
+                                <span class="sr-only">Pas intéressé</span>
                             </button>
                         {% endif %}
                     </div>
@@ -202,26 +172,6 @@
         </tbody>
     </table>
     </div>
-    {% if pagination.total_pages > 1 %}
-    <div class="px-3 py-2 border-t border-slate-200 flex items-center justify-between text-sm">
-        {% if pagination.has_prev %}
-            <a href="{{ request.url.include_query_params(page=pagination.page - 1) }}"
-               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
-                Précédent
-            </a>
-        {% else %}
-            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Précédent</span>
-        {% endif %}
-        <span class="text-slate-500">Page {{ pagination.page }} sur {{ pagination.total_pages }}</span>
-        {% if pagination.has_next %}
-            <a href="{{ request.url.include_query_params(page=pagination.page + 1) }}"
-               class="px-3 py-1.5 border border-slate-300 rounded text-slate-700 hover:bg-slate-100">
-                Suivant
-            </a>
-        {% else %}
-            <span class="px-3 py-1.5 border border-slate-200 rounded text-slate-300">Suivant</span>
-        {% endif %}
-    </div>
-    {% endif %}
+    {{ paginator(pagination, request) }}
 </div>
 {% endblock %}

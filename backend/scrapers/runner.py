@@ -178,8 +178,11 @@ def enrich_descriptions(
     if source:
         where.append("LOWER(source) LIKE LOWER(?)")
         params.append(f"{source}%")
-    # `where` ne contient que des fragments SQL littéraux construits dans la
-    # fonction. `source` passe via `?` (params positionnels), `limit` via int().
+    # SAFE (B608) : `where` est une `list[str]` de fragments SQL HARDCODÉS
+    # (initialisée à `["(description IS NULL OR description = '')", ...]`,
+    # potentiellement augmentée d'un fragment littéral "LOWER(source) LIKE LOWER(?)").
+    # Aucun fragment n'est construit à partir d'un input user. `source` part
+    # via `?`, `limit` via int().
     sql = f"SELECT id, url, source FROM offers WHERE {' AND '.join(where)} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -419,8 +422,10 @@ def check_alive(
     if min_score is not None:
         where.append("match_score >= ?")
         params.append(min_score)
-    # `where` est uniquement composé de fragments SQL littéraux ("url IS NOT NULL",
-    # "match_score >= ?"...). `min_score` passe via `?`, limit via int().
+    # SAFE (B608) : `where` ne contient QUE des fragments SQL littéraux
+    # hardcodés dans la fonction ("url IS NOT NULL", "url != ''", optionnel
+    # "match_score >= ?"). Le seul fragment dynamique utilise un `?` placeholder.
+    # `min_score` part via `?` dans `params`, `limit` via int().
     sql = f"SELECT id, url FROM offers WHERE {' AND '.join(where)} ORDER BY match_score DESC NULLS LAST, id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -428,9 +433,14 @@ def check_alive(
     with db() as conn:
         candidates = [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    # On collecte les verdicts pendant la boucle HTTP (potentiellement longue
+    # — 1000+ URLs × 0.8s = 10-20 min), puis on flush en 2 transactions bulk
+    # à la fin. Atomicité : Ctrl+C / kill au milieu = 0 write (idempotent au
+    # prochain run). Perf : ~10× plus rapide qu'un commit par URL.
+    archived_ids: list[int] = []   # is_active=0
+    revived_ids: list[int] = []    # is_active=1
     archived_http = 0
     archived_soft = 0
-    alive = 0
     inconclusive = 0
     with httpx.Client(
         headers=DEFAULT_HEADERS,
@@ -444,14 +454,13 @@ def check_alive(
             # On va directement sur l'API JSON pour confirmer.
             workday_verdict = _probe_workday_api(url, client)
             if workday_verdict is False:
-                queries.set_alive_state(off["id"], is_active=False)
+                archived_ids.append(off["id"])
                 archived_soft += 1
                 if i < len(candidates):
                     polite_sleep(sleep_between)
                 continue
             if workday_verdict is True:
-                queries.set_alive_state(off["id"], is_active=True)
-                alive += 1
+                revived_ids.append(off["id"])
                 if i < len(candidates):
                     polite_sleep(sleep_between)
                 continue
@@ -467,26 +476,31 @@ def check_alive(
                 inconclusive += 1
                 continue
             if status in _ARCHIVED_STATUS:
-                queries.set_alive_state(off["id"], is_active=False)
+                archived_ids.append(off["id"])
                 archived_http += 1
             elif status in _INCONCLUSIVE_STATUS:
                 inconclusive += 1
             elif 200 <= status < 400:
                 # 200 mais peut-être un soft 404 — on regarde body + title + URL finale
                 if _is_soft_404(resp.text, original_url=url, final_url=str(resp.url)):
-                    queries.set_alive_state(off["id"], is_active=False)
+                    archived_ids.append(off["id"])
                     archived_soft += 1
                 else:
-                    queries.set_alive_state(off["id"], is_active=True)
-                    alive += 1
+                    revived_ids.append(off["id"])
             else:
                 inconclusive += 1
             if i < len(candidates):
                 polite_sleep(sleep_between)
 
+    # Flush en 2 transactions bulk
+    if archived_ids:
+        queries.set_alive_state_bulk([(oid, False) for oid in archived_ids])
+    if revived_ids:
+        queries.set_alive_state_bulk([(oid, True) for oid in revived_ids])
+
     return AliveCheckResult(
         total_checked=len(candidates),
-        still_alive=alive,
+        still_alive=len(revived_ids),
         archived_http=archived_http,
         archived_soft=archived_soft,
         inconclusive=inconclusive,
@@ -527,8 +541,10 @@ def cleanup_dead_unstatused(
     if min_score is not None:
         where.append("match_score >= ?")
         params.append(min_score)
-    # `where` ne contient que des fragments SQL littéraux. `min_score` passe via
-    # `?`, `limit` via int(). Pas d'input user.
+    # SAFE (B608) : même pattern que `check_alive` — `where` est une `list[str]`
+    # de fragments littéraux uniquement, augmentée éventuellement d'un fragment
+    # parametrized "match_score >= ?" (le `?` est le seul lien avec les valeurs).
+    # `min_score` part via `params`, `limit` via int().
     sql = f"SELECT id, url, status FROM offers WHERE {' AND '.join(where)} ORDER BY id"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -536,9 +552,11 @@ def cleanup_dead_unstatused(
     with db() as conn:
         candidates = [dict(r) for r in conn.execute(sql, params).fetchall()]
 
-    deleted = 0
-    archived = 0
-    alive = 0
+    # Collecte des verdicts pendant la boucle HTTP, flush bulk en fin.
+    # Cf `check_alive` pour la rationale atomicité/perf.
+    to_delete: list[int] = []
+    to_archive: list[int] = []
+    to_revive: list[int] = []
     inconclusive = 0
     with httpx.Client(
         headers=DEFAULT_HEADERS,
@@ -588,24 +606,29 @@ def cleanup_dead_unstatused(
 
             if is_dead:
                 if hard_delete_unstatused and not has_status:
-                    queries.delete_offer(off["id"])
-                    deleted += 1
+                    to_delete.append(off["id"])
                 else:
-                    queries.set_alive_state(off["id"], is_active=False)
-                    archived += 1
+                    to_archive.append(off["id"])
             else:
-                queries.set_alive_state(off["id"], is_active=True)
-                alive += 1
+                to_revive.append(off["id"])
 
             if i < len(candidates):
                 polite_sleep(sleep_between)
 
+    # Flush en bulk (jusqu'à 3 transactions au lieu de N par offre)
+    if to_delete:
+        queries.delete_offers_bulk(to_delete)
+    if to_archive:
+        queries.set_alive_state_bulk([(oid, False) for oid in to_archive])
+    if to_revive:
+        queries.set_alive_state_bulk([(oid, True) for oid in to_revive])
+
     return CleanupResult(
         total_checked=len(candidates),
-        deleted=deleted,
-        archived=archived,
+        deleted=len(to_delete),
+        archived=len(to_archive),
         inconclusive=inconclusive,
-        still_alive=alive,
+        still_alive=len(to_revive),
     )
 
 

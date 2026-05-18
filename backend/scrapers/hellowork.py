@@ -25,6 +25,10 @@ from bs4 import BeautifulSoup
 from backend.scrapers._http import (
     get_with_retry, http_client, polite_sleep,
 )
+from backend.scrapers._jsonld import (
+    extract_jobposting_description,
+    normalize_whitespace,
+)
 from backend.scrapers._keywords import matches_keywords
 from backend.scrapers.base import RawOffer, Scraper
 
@@ -212,7 +216,7 @@ class HelloWorkScraper(Scraper):
 
         Stratégie : parser le JSON-LD JobPosting (présent sur toutes les pages
         détail HelloWork, contient description HTML complète).
-        Fallback : parser le HTML brut.
+        Fallback : parser le HTML brut sur les containers connus.
         """
         with http_client() as client:
             resp = get_with_retry(client, url)
@@ -220,31 +224,18 @@ class HelloWorkScraper(Scraper):
                 return None
             soup = BeautifulSoup(resp.text, "lxml")
 
-            # 1) Stratégie JSON-LD JobPosting (la plus propre)
-            import json as _json
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    data = _json.loads(script.string or "{}")
-                except (_json.JSONDecodeError, TypeError):
-                    continue
-                if not isinstance(data, dict):
-                    continue
-                if data.get("@type") == "JobPosting":
-                    desc_html = data.get("description", "")
-                    if desc_html:
-                        # Strip HTML pour avoir du texte propre
-                        inner = BeautifulSoup(desc_html, "lxml")
-                        text = inner.get_text(separator="\n", strip=True)
-                        text = re.sub(r"\n{3,}", "\n\n", text)
-                        if len(text) > 200:
-                            return text
+            # 1) JSON-LD JobPosting (gère dict / list / @graph)
+            text = extract_jobposting_description(soup)
+            if text:
+                return text
 
-            # 2) Fallback : HTML brut
+            # 2) Fallback HTML brut sur les containers HelloWork
             for sel in ("[data-cy=jobBody]", "article", "main"):
                 el = soup.select_one(sel)
                 if el:
-                    text = el.get_text(separator="\n", strip=True)
-                    text = re.sub(r"\n{3,}", "\n\n", text)
+                    text = normalize_whitespace(
+                        el.get_text(separator="\n", strip=True)
+                    )
                     if len(text) > 200:
                         return text
             return None

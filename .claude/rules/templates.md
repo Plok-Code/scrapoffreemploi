@@ -1,19 +1,22 @@
 ---
-description: Jinja templates + HTMX + Tailwind via CDN
+description: Jinja templates + HTMX + Tailwind vendored localement
 paths:
   - backend/templates/**
   - backend/static/**
 ---
 
-# Templates Jinja + HTMX + Tailwind CDN
+# Templates Jinja + HTMX + Tailwind (vendored)
 
 ## Stack frontend
 
 - **Jinja2** : moteur de templates, livré par FastAPI
-- **HTMX 2.0** via CDN (`<script src="https://unpkg.com/htmx.org@2.0.4">`)
-- **Tailwind v3** via CDN (`<script src="https://cdn.tailwindcss.com">`)
+- **HTMX 2.0.4** vendored local : `backend/static/htmx-2.0.4.min.js` (SRI sha384, ~50 KB)
+- **Tailwind v3.4.17** vendored local : `backend/static/tailwind-3.4.17.min.js` (SRI sha384, ~407 KB)
 - **CSS custom** : `backend/static/style.css` (minimal, juste fallback font)
-- **Pas de JS custom**, pas de build step, pas de bundler
+- **Pas de JS custom**, pas de build step, pas de bundler, **aucune dépendance CDN runtime**
+
+Pour mettre à jour une lib : remplacer le fichier dans `backend/static/`,
+recalculer le SHA-384 SRI (script httpx + hashlib), mettre à jour `base.html`.
 
 ## Hiérarchie
 

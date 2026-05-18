@@ -151,61 +151,58 @@ def list_distinct_statuses() -> list[str]:
 
 
 def get_stats() -> dict:
-    """KPIs pour la barre de stats en haut de page (offres actives uniquement).
+    """KPIs pour la barre de stats en haut de page.
 
-    Toutes les queries sont des littéraux SQL constants (pas de f-string ni
-    d'input user) — défensif et bandit-clean sans `# nosec`.
+    Une SEULE requête SQL avec `SUM(CASE WHEN cond THEN 1 ELSE 0 END)` —
+    ~10× plus rapide que 9 `SELECT COUNT(*)` séparés sur 1000+ offres
+    (un seul scan de table + un seul commit côté WAL).
+
+    Toutes les conditions sont des littéraux SQL constants (pas d'input user),
+    bandit-clean sans `# nosec`.
+
+    Notes :
+    - `is_active IS NULL OR is_active = 1` = "offre active" (NULL = pré-migration v2)
+    - `archived` compte les offres avec `is_active = 0` (à exclure des autres KPIs)
+    - `top_fit` ≥ 80, `bon_fit` ∈ [60, 80[ — cf `models.label_for_score`
+    """
+    sql = """
+        SELECT
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                     THEN 1 ELSE 0 END) AS total,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND status IS NULL
+                     THEN 1 ELSE 0 END) AS to_apply,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND status = 'Postulé'
+                     THEN 1 ELSE 0 END) AS applied,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND status = 'Entretien'
+                     THEN 1 ELSE 0 END) AS interviews,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND status = 'Refusé'
+                     THEN 1 ELSE 0 END) AS refused,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND match_score >= 80
+                     THEN 1 ELSE 0 END) AS top_fit,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND match_score >= 60 AND match_score < 80
+                     THEN 1 ELSE 0 END) AS bon_fit,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND match_score IS NULL
+                     THEN 1 ELSE 0 END) AS unscored,
+            SUM(CASE WHEN (is_active IS NULL OR is_active = 1)
+                          AND status = 'Pas intéressé'
+                     THEN 1 ELSE 0 END) AS not_interested,
+            SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS archived
+        FROM offers
     """
     with db() as conn:
-        cur = conn.cursor()
-        total = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        to_apply = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE status IS NULL "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        applied = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE status = 'Postulé' "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        interviews = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE status = 'Entretien' "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        refused = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE status = 'Refusé' "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        top_fit = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE match_score >= 80 "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        bon_fit = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE match_score >= 60 AND match_score < 80 "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        unscored = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE match_score IS NULL "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        not_interested = cur.execute(
-            "SELECT COUNT(*) FROM offers WHERE status = 'Pas intéressé' "
-            "AND (is_active IS NULL OR is_active = 1)"
-        ).fetchone()[0]
-        archived = cur.execute("SELECT COUNT(*) FROM offers WHERE is_active = 0").fetchone()[0]
-    return {
-        "total": total,
-        "to_apply": to_apply,
-        "applied": applied,
-        "interviews": interviews,
-        "refused": refused,
-        "top_fit": top_fit,
-        "bon_fit": bon_fit,
-        "unscored": unscored,
-        "not_interested": not_interested,
-        "archived": archived,
-    }
+        row = conn.execute(sql).fetchone()
+    # `SUM(0 rows)` retourne NULL en SQLite → on coerce à 0 pour stabilité du retour.
+    return {k: int(row[k] or 0) for k in (
+        "total", "to_apply", "applied", "interviews", "refused",
+        "top_fit", "bon_fit", "unscored", "not_interested", "archived",
+    )}
 
 
 # ---------- Writes ----------
@@ -246,6 +243,61 @@ def set_alive_state(offer_id: int, *, is_active: bool) -> bool:
             {"state": 1 if is_active else 0, "id": offer_id},
         )
         return cur.rowcount > 0
+
+
+def set_alive_state_bulk(updates: list[tuple[int, bool]]) -> int:
+    """Bulk update `is_active` + stamp `last_checked_at` sur N offres en
+    **une seule transaction**.
+
+    Utilisé par `cleanup_dead_unstatused` et `check_alive` qui peuvent toucher
+    1000+ offres par run : 1 transaction au lieu de N évite l'effet "à mi-chemin"
+    (Ctrl+C / crash uvicorn) et gagne ~10× en perf (WAL commit unique).
+
+    Args:
+        updates: liste de tuples `(offer_id, is_active_bool)`.
+
+    Returns:
+        Le nombre de rows réellement updatées (somme des `rowcount`).
+    """
+    if not updates:
+        return 0
+    payload = [(1 if state else 0, oid) for oid, state in updates]
+    with db() as conn:
+        cur = conn.executemany(
+            """
+            UPDATE offers
+            SET is_active = ?, last_checked_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            payload,
+        )
+        return cur.rowcount
+
+
+def delete_offers_bulk(ids: list[int]) -> int:
+    """Bulk DELETE sur N offres en **une seule transaction**.
+
+    Réservé au cleanup des URLs mortes + status NULL (mode purge explicite,
+    `hard_delete_unstatused=True`). L'historique applicatif des offres ayant
+    un statut user est préservé via `set_alive_state_bulk(..., False)`.
+
+    Args:
+        ids: liste d'`offer_id` à supprimer.
+
+    Returns:
+        Le nombre de rows réellement supprimées.
+    """
+    if not ids:
+        return 0
+    # SAFE (B608) : `placeholders` est une chaîne `"?,?,..."` générée
+    # uniquement à partir de la LONGUEUR de `ids` — jamais à partir du contenu.
+    # Tous les ids passent par sqlite3 via `conn.execute(sql, ids)` (params
+    # positionnels, escaping géré par le driver).
+    placeholders = ",".join("?" * len(ids))
+    sql = f"DELETE FROM offers WHERE id IN ({placeholders})"  # nosec B608
+    with db() as conn:
+        cur = conn.execute(sql, ids)
+        return cur.rowcount
 
 
 def insert_offer(offer_data: dict) -> tuple[int | None, bool]:
@@ -442,7 +494,10 @@ def update_offer(offer_id: int, fields: dict[str, Any]) -> bool:
     _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
     _validate_enum("remote", clean.get("remote"), VALID_REMOTE)
 
-    # `clean` keys filtrés via ALLOWED_UPDATE_FIELDS (whitelist), valeurs via :name.
+    # SAFE (B608) : `clean` est filtré par ALLOWED_UPDATE_FIELDS (whitelist
+    # module-level constante). Les noms de colonnes injectés dans le SQL ne
+    # peuvent donc PAS venir d'un input user. Les valeurs passent via :name
+    # (params nommés, escaping sqlite3).
     set_clause = ", ".join(f"{k} = :{k}" for k in clean)
     sql = f"UPDATE offers SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = offer_id
@@ -610,8 +665,10 @@ def count_other_haute() -> int:
     for c in TARGET_CITIES:
         where_parts.append("LOWER(COALESCE(city, '')) NOT LIKE ?")
         params.append(f"%{c.lower()}%")
-    # `where_parts` ne contient que des fragments SQL littéraux construits dans
-    # la fonction (pas d'input user). Les valeurs partent via `?`.
+    # SAFE (B608) : `where_parts` ne contient que des fragments SQL littéraux
+    # ("priority = 'Haute'", "LOWER(COALESCE(city, '')) NOT LIKE ?") construits
+    # dans la fonction depuis la constante TARGET_CITIES. Aucun input user
+    # n'est interpolé. Les valeurs des villes (params LIKE) partent via `?`.
     sql = f"SELECT COUNT(*) AS n FROM target_companies WHERE {' AND '.join(where_parts)}"  # nosec B608
     with db() as conn:
         return conn.execute(sql, params).fetchone()["n"]
@@ -768,7 +825,10 @@ def update_target_company(company_id: int, fields: dict[str, Any]) -> bool:
     _validate_enum("status", clean.get("status"), VALID_COMPANY_STATUSES)
     _validate_enum("priority", clean.get("priority"), VALID_PRIORITIES)
 
-    # `clean` keys filtrés via ALLOWED_COMPANY_UPDATE_FIELDS (whitelist), valeurs via :name.
+    # SAFE (B608) : même pattern que `update_offer` — `clean` est filtré par
+    # ALLOWED_COMPANY_UPDATE_FIELDS (whitelist constante). Les colonnes
+    # injectées sont garanties dans une liste finie connue à l'écriture du code.
+    # Les valeurs passent via :name.
     set_clause = ", ".join(f"{k} = :{k}" for k in clean)
     sql = f"UPDATE target_companies SET {set_clause} WHERE id = :id"  # nosec B608
     clean["id"] = company_id

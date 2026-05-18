@@ -532,8 +532,10 @@ def scrape_target_company_portals(
     if city_filter:
         where.append("LOWER(city) LIKE ?")
         params.append(f"%{city_filter.lower()}%")
-    # `where` est une liste de fragments SQL littéraux construits dans la
-    # fonction (jamais d'input user). `city_filter` passe via `?`.
+    # SAFE (B608) : `where` est une `list[str]` de fragments littéraux
+    # ("source_url IS NOT NULL", "source_url != ''", optionnel "LOWER(city) LIKE ?").
+    # Aucun fragment n'est construit depuis un input user. `city_filter`,
+    # quand fourni, part via `?` dans `params`. `limit` via int().
     sql = (
         f"SELECT id, name, source_url FROM target_companies "  # nosec B608
         f"WHERE {' AND '.join(where)} ORDER BY id"

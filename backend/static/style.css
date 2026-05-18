@@ -1,2 +1,19 @@
 /* Custom styles minimaux. Tailwind via CDN gère le reste. */
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+
+/* sr-only : texte uniquement lisible par lecteurs d'écran (a11y).
+   Tailwind CDN génère cette classe à la volée si la chaîne `sr-only` est
+   présente dans le HTML rendu — la définir ici garantit qu'elle est
+   appliquée même si le scan Tailwind rate l'attribut (cas observé avec
+   les classes incluses dans des `<span>` à l'intérieur de boutons emoji). */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
