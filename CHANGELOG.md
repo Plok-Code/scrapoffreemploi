@@ -6,6 +6,105 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed + Added — Sprint qualité (19 mai 2026, 4e audit utilisateur) : contract_type + soft-404 + ruff
+
+4e passe d'audit utilisateur. Sur 9 points levés, 5 étaient déjà fixés
+(état stale du checkout), 4 vrais + 1 gap tooling :
+
+#### Fix #4 — Plus de fallback `contract_type="Alternance"` sans evidence
+
+Les scrapers portail (Workable / Lever / Greenhouse / Workday / Taleez /
+Phenom / Playwright / generic) **forçaient** `contract_type="Alternance"`
+même quand le titre/description ne le prouvait pas. En aval,
+`filter_alternance.classify_offer()` faisait KEEP via la branche
+`contract_type` (étape 2) — un "Data Engineer Senior CDI" passait à
+travers le filtre.
+
+- **`backend/filter_alternance.py`** : nouveau helper public
+  `is_alternance_indicator(text)` qui réutilise `_KEEP_PATTERN` (même regex
+  que `classify_offer`). **Source unique de vérité** : si l'indicateur change
+  un jour, les portails et le filtre restent alignés.
+- **`backend/scrapers/company_portals.py`** : helper `_contract_type_for(title, description)`
+  qui retourne "Alternance" UNIQUEMENT si `is_alternance_indicator` détecte un
+  marqueur. Tous les `contract_type="Alternance"` hardcodés (7 occurrences)
+  remplacés par cet appel. Plus aucun forçage aveugle.
+- **`backend/scrapers/runner.py:80`** : suppression de `raw.contract_type or "Alternance"`.
+  Si un scraper laisse `None`, ça reste `None` → `filter_alternance` tranche
+  sur title + description (signal honnête).
+- **`tests/test_alternance_indicator.py`** : 19 tests
+  - `is_alternance_indicator` : 7 cas POSITIFS (alternance, apprenti, contrat pro…)
+    + 6 cas NÉGATIFS (Senior CDI, stage, vide, None) parametrized.
+  - `_contract_type_for` : aucun evidence → None, title alterna → Alternance,
+    desc alterna → Alternance, None inputs OK.
+  - **Régression critique** : sans `contract_type` forcé, classify_offer
+    REJECTE "Data Engineer Senior" via REJECT_TITLE — ce qui était le bug
+    bloqué par l'ancien forçage.
+
+#### Fix #6 — Soft-404 : seuil 50% → 30% + exigence d'absence de marqueur d'offre
+
+L'heuristique "URL finale < 50% original → soft-404" archivait à tort les
+canonical redirects (qui tombent typiquement à 70-80% de l'origine).
+3e audit consécutif à signaler ce risque.
+
+- **`backend/scrapers/runner.py:_is_soft_404`** :
+  - Seuil durci à **30%** (passe les canonical, garde les login/home).
+  - **ET** exigence supplémentaire : l'URL finale ne doit PAS contenir un
+    marqueur d'offre individuelle (`/jobs/`, `/offers/`, `/offer/`, `/job/`,
+    `/position/`, `/role/`, `/career/`, `/emploi/`). Si oui = redirect vers
+    une autre offre légitime, pas une mort.
+- **`tests/test_soft_404_threshold.py`** : 12 tests
+  - Canonical redirect 30% du url avec `/jobs/12345` → KEEP alive (le bon
+    nouveau comportement).
+  - Login redirect court sans marqueur → SOFT 404 (l'ancien comportement
+    correct préservé).
+  - Home redirect → SOFT 404.
+  - Pas de redirect (URL inchangée) → KEEP alive.
+  - 7 cas parametrized sur les marqueurs d'offre individuelle.
+
+#### Fix #8 — CLAUDE.md mis à jour (tests count + règle SQL)
+
+- "83 tests, ~2 sec" (lignes 34 + 89) → **422 tests, ~15s en venv**.
+- Règle #3 "Toujours passer par `queries.py` — pas de SQL inline" reformulée
+  pour refléter la réalité du code : `queries.py` est le défaut pour
+  `main.py` + templates, mais du SQL inline reste autorisé dans
+  `migrations/*.sql`, `seed_*.py`, `runner.py`, `matching.py` à condition
+  d'avoir un `# SAFE (B608) : ...` au-dessus (convention P1.6).
+
+#### Tooling — Ajout de ruff
+
+L'audit a flaggé l'absence de lint statique. Ajouté :
+
+- **`requirements.txt`** : `ruff>=0.6`.
+- **`requirements.lock`** : régénéré, `ruff==0.15.13` inclus.
+- **`pyproject.toml`** : section `[tool.ruff]` avec configuration mesurée :
+  - `line-length=110`, `target-version="py310"`.
+  - Sélection minimale : `F` (pyflakes), `E/W` (pycodestyle), `I` (isort),
+    `B` (bugbear), `ARG` (unused args — aurait attrapé `only_unscored_or_scored`),
+    `RUF` (ruff-specific).
+  - Ignorés : `E501` (line too long, on garde permissif), `B008` (FastAPI
+    `Form(...)` defaults), `ARG002` (ABC `fetch_detail` du Scraper),
+    `RUF001/002/003` (apostrophes courbes et tirets cadratin en français —
+    faux positifs systématiques sur le projet FR).
+  - Per-file ignores : `tests/*` (fixtures avec args), `seed_*.py` (params symboliques).
+- **Premier passage `ruff check --fix`** : 48 issues auto-fixées (imports
+  réorganisés via isort, etc.), 17 restantes analysées une par une :
+  - 2 `F841` dead variables (`country` dans Lever, `department` dans WTTJ) → supprimées.
+  - 4 `B904` raise sans `from e` (4 routes dans `main.py`) → ajout
+    `raise HTTPException(422, str(e)) from e` (préserve la chaîne dans le traceback).
+  - 1 `E741` variable ambiguë `l` → renommée `label`.
+  - 1 `ARG001` `max_retries` legacy dans `_http.py` → `# noqa: ARG001` documenté.
+  - 2 `E402` imports tardifs (`import os as _os` dans `main.py`, `import re as _re`
+    dans `runner.py`) → déplacés en haut du module.
+  - 7 `RUF001/2/3` unicode → ignorés via config (français).
+
+#### Bilan venv propre
+
+- `pytest tests/ -q` : **422 passed in 14.58s** (391 → 422 = +31 nouveaux :
+  19 alternance indicator + 12 soft-404 threshold).
+- `bandit -r backend cli.py` : **0 issues, exit 0**.
+- `ruff check backend cli.py` : **All checks passed!**, exit 0.
+- E2E `/api/stats` : valeurs prod identiques (1189 actives).
+
 ### Fixed — Sprint qualité (19 mai 2026, 3e audit utilisateur) : 4 findings
 
 3e passe d'audit utilisateur. Sur 9 points levés, 4 étaient des **vrais bugs**

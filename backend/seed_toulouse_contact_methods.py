@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from backend.db import db
 
-
 # Mapping company_id → contact_channel optimisé (Toulouse-specific)
 # Note : on utilise les IDs qui sont stables (cf. requête SELECT précédente)
 TOULOUSE_CONTACT_METHODS: dict[int, str] = {

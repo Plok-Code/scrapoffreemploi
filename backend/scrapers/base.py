@@ -101,6 +101,6 @@ class Scraper(ABC):
     ) -> list[RawOffer]:
         """Liste les offres correspondant aux mots-clés. Filtre alternance + France."""
 
-    def fetch_detail(self, url: str) -> str | None:  # noqa: ARG002
+    def fetch_detail(self, url: str) -> str | None:
         """Récupère la description complète d'une offre. Par défaut : non implémenté."""
         return None

@@ -52,7 +52,7 @@ def _extract_from_html(html: str) -> str | None:
 class LinkedInScraper(Scraper):
     source_name = "LinkedIn"
 
-    def fetch_list(self, *, keywords: list[str], max_pages: int = 5) -> list[RawOffer]:  # noqa: ARG002
+    def fetch_list(self, *, keywords: list[str], max_pages: int = 5) -> list[RawOffer]:
         # À venir : Playwright sur la page de recherche LinkedIn avec cookies persistés
         return []
 
@@ -64,7 +64,7 @@ class LinkedInScraper(Scraper):
                 desc = self._fetch_detail_playwright(url, persistent_browser)
                 if desc:
                     return desc
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Si Playwright n'est pas installé ou plante, on passe au fallback
             logger.debug("LinkedIn Playwright KO, fallback httpx : {err}", err=str(e))
 
@@ -88,7 +88,7 @@ class LinkedInScraper(Scraper):
                         timeout=12000,
                         state="attached",
                     )
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     # Timeout du selector : on tente quand même l'extract sur le DOM actuel
                     logger.debug(
                         "LinkedIn wait_for_selector timeout url={u} err={err}",

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from backend.db import db
 
-
 # Mapping alias → nom canonique.
 # IMPORTANT : ne fusionne PAS des BUs distinctes (Thales Alenia Space ≠ Thales DMS).
 # Cible uniquement les variantes nominales d'une même entité juridique/marque.

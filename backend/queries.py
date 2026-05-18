@@ -6,7 +6,6 @@ from typing import Any, Optional
 
 from backend.db import db
 
-
 # ---------- Helpers ----------
 
 def _row_to_dict(row: sqlite3.Row | None) -> Optional[dict]:

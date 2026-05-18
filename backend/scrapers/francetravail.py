@@ -24,7 +24,6 @@ from backend._logging import logger
 from backend.scrapers._keywords import matches_keywords
 from backend.scrapers.base import RawOffer, Scraper
 
-
 # --- Config ---
 
 # Endpoint OAuth (pas un secret — c'est l'URL publique documentée de France Travail)

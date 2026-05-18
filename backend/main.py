@@ -1,6 +1,7 @@
 """App FastAPI : routes web + Jinja templates."""
 from __future__ import annotations
 
+import os as _os
 from contextlib import asynccontextmanager
 from math import ceil
 from pathlib import Path
@@ -103,8 +104,6 @@ templates.env.filters["safe_href"] = _safe_href
 # Les origins en plus de l'env var s'AJOUTENT aux defaults (les defaults ne
 # sont jamais retirés — limite de surface : un override ne casse jamais
 # l'usage local 127.0.0.1:8000).
-
-import os as _os
 
 _DEFAULT_ALLOWED_ORIGINS = {
     "http://127.0.0.1:8000",
@@ -289,7 +288,11 @@ def update_offer_route(
             },
         )
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        # `from e` : préserve la chaîne d'exception dans le traceback côté
+        # serveur (utile pour debugger les ValueError de queries._validate_enum
+        # via data/logs/errors.log). FastAPI renvoie au client uniquement le
+        # `str(e)` formaté.
+        raise HTTPException(422, str(e)) from e
     if not ok:
         raise HTTPException(404, "Offre introuvable ou aucun champ à mettre à jour")
     return RedirectResponse(f"/offers/{offer_id}", status_code=303)
@@ -398,7 +401,11 @@ def update_company_route(
             },
         )
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        # `from e` : préserve la chaîne d'exception dans le traceback côté
+        # serveur (utile pour debugger les ValueError de queries._validate_enum
+        # via data/logs/errors.log). FastAPI renvoie au client uniquement le
+        # `str(e)` formaté.
+        raise HTTPException(422, str(e)) from e
     if not ok:
         raise HTTPException(404, "Entreprise introuvable ou aucun champ à mettre à jour")
     return RedirectResponse(f"/companies/{company_id}", status_code=303)
@@ -416,7 +423,11 @@ def api_update_offer(offer_id: int, payload: dict):
     try:
         ok = queries.update_offer(offer_id, payload)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        # `from e` : préserve la chaîne d'exception dans le traceback côté
+        # serveur (utile pour debugger les ValueError de queries._validate_enum
+        # via data/logs/errors.log). FastAPI renvoie au client uniquement le
+        # `str(e)` formaté.
+        raise HTTPException(422, str(e)) from e
     if not ok:
         raise HTTPException(404, "Offre introuvable")
     return {"ok": True}
@@ -431,7 +442,11 @@ def api_set_offer_status(offer_id: int, status: str = Form("")):
     try:
         ok = queries.update_offer(offer_id, {"status": status})
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        # `from e` : préserve la chaîne d'exception dans le traceback côté
+        # serveur (utile pour debugger les ValueError de queries._validate_enum
+        # via data/logs/errors.log). FastAPI renvoie au client uniquement le
+        # `str(e)` formaté.
+        raise HTTPException(422, str(e)) from e
     if not ok:
         raise HTTPException(404, "Offre introuvable")
     return {"ok": True, "offer_id": offer_id, "status": status or None}
@@ -506,7 +521,7 @@ def _run_scrape_bg(source: str, max_pages: int) -> None:
             "total_new": result.total_new,
             "total_duplicates": result.total_duplicates,
         })
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Le traceback complet va dans data/logs/errors.log (loguru backtrace=True).
         # _SCRAPE_STATE garde juste le message court pour l'affichage UI.
         logger.opt(exception=True).warning(
@@ -591,7 +606,7 @@ def _run_full_scrape_bg(
             "per_source": per_source_summary,
             "batch_file": result.batch_file,
         })
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Le traceback complet va dans data/logs/errors.log (loguru backtrace=True).
         # _SCRAPE_STATE garde juste le message court pour l'affichage UI.
         logger.opt(exception=True).warning(

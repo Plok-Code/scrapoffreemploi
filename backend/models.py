@@ -1,7 +1,6 @@
 """Modèles Pydantic et constantes métier."""
 from __future__ import annotations
 
-from datetime import date
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field

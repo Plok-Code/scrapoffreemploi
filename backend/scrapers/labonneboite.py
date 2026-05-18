@@ -16,8 +16,8 @@ import httpx
 
 # Réutilise le flow OAuth de francetravail.py mais avec un scope différent
 from backend.scrapers.francetravail import (
-    TOKEN_URL,
     _TOKEN_CACHE,
+    TOKEN_URL,
     _load_env,
 )
 
@@ -224,7 +224,7 @@ def import_lbb_to_targets(
                 inserted += 1
             else:
                 skipped += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             errors += 1
 
     return {

@@ -134,13 +134,19 @@ def _get_with_retry_inner(client: httpx.Client, url: str) -> httpx.Response:
     return client.get(url)
 
 
-def get_with_retry(client: httpx.Client, url: str, *, max_retries: int = 4) -> httpx.Response:
+def get_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    max_retries: int = 4,  # noqa: ARG001 — conservé pour compat API
+) -> httpx.Response:
     """GET avec retries exponential backoff (tenacity).
 
     Args:
-        max_retries: nombre max de tentatives. Ignoré — on utilise le decorator
-            global (4 tentatives = 1 initial + 3 retries, attente 2-4-8s).
-            Conservé pour compat avec ancien code.
+        max_retries: **conservé pour compat avec ancien code, mais ignoré**.
+            Le retry est appliqué par le décorateur global sur
+            `_get_with_retry_inner` (4 tentatives = 1 initial + 3 retries,
+            attente 2-4-8s). Pour customiser, passer par tenacity directement.
     """
     try:
         return _get_with_retry_inner(client, url)

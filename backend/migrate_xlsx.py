@@ -24,7 +24,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import range_boundaries
 
 from backend.db import db, init_schema, make_dedup_key
-from backend.models import VALID_STATUSES, label_for_score
+from backend.models import label_for_score
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPANIES_JSON = ROOT / "data" / "companies_spontaneous_extracted.json"
@@ -385,8 +385,8 @@ def run(argv: list[str] | None = None) -> int:
     for s, c in by_status:
         print(f"  {s or '(aucun)'} : {c}")
     print("Match label :")
-    for l, c in by_label:
-        print(f"  {l or '(aucun)'} : {c}")
+    for label, count in by_label:
+        print(f"  {label or '(aucun)'} : {count}")
 
     # --- Tables 2-6 : extraction des entreprises 'candidature spontanée' vers JSON ---
     companies = extract_companies_tables(ws, tables)

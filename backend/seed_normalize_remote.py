@@ -14,7 +14,6 @@ from __future__ import annotations
 from backend._logging import init_logging, logger
 from backend.db import db
 
-
 # Mapping valeur libre → valeur normalisée (None pour effacement)
 REMOTE_NORMALIZATION: dict[str, str | None] = {
     "Télétravail partiel": "Hybride",

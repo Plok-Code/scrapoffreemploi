@@ -16,3 +16,39 @@ exclude_dirs = ["tests", "legacy", "data", ".venv", ".claude", "reference"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 # Sortie courte par défaut, marqueurs stricts (catch les typos genre @pytest.mar.xxx)
+
+[tool.ruff]
+# Lint statique. Intro graduelle : on n'enforce que les règles qui ont attrapé
+# un vrai bug dans l'audit ou qui ont une valeur évidente. Le `select` reste
+# minimal pour ne pas noyer le user de remarques stylistiques sur un projet
+# perso. Élargir progressivement.
+line-length = 110
+target-version = "py310"
+extend-exclude = ["legacy", "data", "reference", ".claude/worktrees"]
+
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes (unused imports, undefined names, etc.)
+    "E",     # pycodestyle errors (sans E501 = line too long)
+    "W",     # pycodestyle warnings
+    "I",     # isort (ordre imports)
+    "B",     # flake8-bugbear (mutable defaults, exception bugs, etc.)
+    "ARG",   # unused arguments (catch les params morts type `only_unscored_or_scored`)
+    "RUF",   # ruff-specific (incl. RUF013 implicit Optional)
+]
+ignore = [
+    "E501",  # line too long : on a `line-length=110` mais on accepte un peu plus
+    "B008",  # function call in default arg (FastAPI : `Form(...)`, `Query(...)`)
+    "ARG002",# unused method argument : courant dans les ABC (Scraper.fetch_detail)
+    # RUF001/002/003 : faux positifs sur le français (apostrophe courbe `'` vs `'`,
+    # tiret cadratin `—` vs hyphen, etc.). Le projet est en FR, ces caractères
+    # sont normaux dans les docstrings/strings/comments.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG", "B011"]   # tests : fixtures avec args non utilisés, assert False OK
+"backend/seed_*.py" = ["ARG"] # seeds one-shot : params parfois symboliques
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]

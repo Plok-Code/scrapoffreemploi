@@ -32,7 +32,7 @@ from pathlib import Path
 from loguru import logger
 
 # Réexporte le logger global de loguru pour les imports
-__all__ = ["logger", "init_logging"]
+__all__ = ["init_logging", "logger"]
 
 
 _INITIALIZED = False

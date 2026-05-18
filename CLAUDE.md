@@ -31,7 +31,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx --force
 python -m backend
 # → http://localhost:8000
 
-# Tests pytest (83 tests, ~2 sec, sans network)
+# Tests pytest (422 tests, ~15s en venv, sans network)
 $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -v
 
 # Logs (rotation auto 10MB, 7 fichiers gz)
@@ -86,7 +86,7 @@ scrapoffreemploi/
 │   │   ├── company_portals.py  # Workable / Lever / Workday / Greenhouse / Taleez / Phenom / Playwright
 │   │   └── labonneboite.py     # LBB v2 (bloqué 403, habilitation FT requise)
 │   ├── templates/              # Jinja : base, offers, offer_detail, companies, company_detail
-├── tests/                      # pytest avec mocks HTML (83 tests, ~2 sec)
+├── tests/                      # pytest avec mocks HTML (422 tests, ~15s en venv)
 │   ├── conftest.py             # fixtures HTML (Workday dead, AXA redirect, Doctolib alive)
 │   ├── test_keywords.py        # 15 tests : matches_keywords
 │   ├── test_filter_alternance.py  # 14 tests : classify_offer
@@ -147,7 +147,7 @@ Quand tu travailles sur :
 
 1. **JAMAIS toucher au xlsx** `data/source/candidatures_alternance_AI_Engineer.xlsx` — lecture seule uniquement. Si tu dois modifier des données, fais-le dans SQLite.
 2. **JAMAIS d'API Anthropic** — pas de clé. Le scoring LLM manuel passe par ce chat Claude Code Max (workflow batch). Le scoring auto utilise des heuristiques sans LLM.
-3. **Toujours passer par `queries.py`** pour les accès DB — pas de SQL inline dans `main.py` ou les templates. Pour les batchs, utiliser `insert_offers_bulk` (1 transaction).
+3. **`queries.py` est le défaut pour les accès DB depuis `main.py` et les templates.** Du SQL inline reste autorisé dans les contextes spécialisés (ex : `migrations/*.sql`, `seed_*.py` one-shot, `runner.py`/`matching.py` pour les boucles d'orchestration ou filtres dynamiques) — chaque cas doit être annoté `# SAFE (B608) : ...` au-dessus du f-string (cf P1.6) pour documenter pourquoi le SQL construit n'est PAS un input user. Pour les batchs d'insertion, utiliser `insert_offers_bulk` (1 transaction).
 4. **dedup_key inclut la ville** : `make_dedup_key(title, company, city)`. Une même offre à Paris vs Toulouse = 2 inserts distincts.
 5. **JAMAIS `except Exception: pass`** silencieux — toujours `logger.warning/error` avec le contexte (offer_id, url, etc.).
 6. **`print()` interdit dans les modules non-CLI** — utiliser `logger.info/warning/error/debug` (loguru auto-init dans main.py).

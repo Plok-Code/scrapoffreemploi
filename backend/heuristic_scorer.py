@@ -14,8 +14,6 @@ from dataclasses import dataclass
 
 from backend import queries
 from backend.db import db
-from backend.models import label_for_score
-
 
 # Mots-clés par axe avec poids. La présence (insensible casse) ajoute le poids.
 # Capping à 20 max par axe.

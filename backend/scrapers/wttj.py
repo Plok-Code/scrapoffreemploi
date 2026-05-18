@@ -10,7 +10,10 @@ import httpx
 from bs4 import BeautifulSoup
 
 from backend.scrapers._http import (
-    DEFAULT_HEADERS, get_with_retry, http_client, polite_sleep,
+    DEFAULT_HEADERS,
+    get_with_retry,
+    http_client,
+    polite_sleep,
 )
 from backend.scrapers._jsonld import (
     extract_jobposting_description,
@@ -55,7 +58,6 @@ def _hit_to_raw(hit: dict) -> RawOffer | None:
     offices = hit.get("offices") or []
     office = offices[0] if offices else {}
     city = office.get("city") or office.get("locality")
-    department = None
     org_slug = org.get("slug")
     job_slug = hit.get("slug") or hit.get("reference")
     url = (

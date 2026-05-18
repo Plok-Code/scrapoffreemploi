@@ -22,9 +22,22 @@ from bs4 import BeautifulSoup
 from backend import queries
 from backend._logging import logger
 from backend.db import db
+from backend.filter_alternance import is_alternance_indicator
 from backend.scrapers._http import DEFAULT_HEADERS, polite_sleep
 from backend.scrapers._keywords import matches_keywords
 from backend.scrapers.base import RawOffer
+
+
+def _contract_type_for(title: str | None, description: str | None = None) -> str | None:
+    """Renvoie 'Alternance' si le titre ou la description le prouve, sinon None.
+
+    Source unique de vérité : utilise `is_alternance_indicator` qui partage la
+    même regex que `filter_alternance.classify_offer`. Évite les divergences
+    entre "ce que le scraper marque" et "ce que le filtre garde/rejette".
+    """
+    if is_alternance_indicator(title) or is_alternance_indicator(description):
+        return "Alternance"
+    return None
 
 
 @dataclass
@@ -108,7 +121,7 @@ def _fetch_workable_jobs(slug: str, company_name: str, client: httpx.Client) -> 
             )
             return []
         data = r.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Workable API exception (slug={slug}, company={c}) : {err}",
             slug=slug, c=company_name, err=str(e),
@@ -136,7 +149,7 @@ def _fetch_workable_jobs(slug: str, company_name: str, client: httpx.Client) -> 
             url=offer_url,
             source=f"Portail entreprise - {company_name} (Workable)",
             description=j.get("description"),
-            contract_type="Alternance" if "alterna" in title.lower() else None,
+            contract_type=_contract_type_for(title, j.get("description")),
         ))
     return offers
 
@@ -153,7 +166,7 @@ def _fetch_lever_jobs(slug: str, company_name: str, client: httpx.Client) -> lis
             )
             return []
         data = r.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Lever API exception (slug={slug}, company={c}) : {err}",
             slug=slug, c=company_name, err=str(e),
@@ -168,7 +181,6 @@ def _fetch_lever_jobs(slug: str, company_name: str, client: httpx.Client) -> lis
             continue
         categories = j.get("categories") or {}
         location = categories.get("location") or j.get("location")
-        country = (location or "").upper() if isinstance(location, str) else ""
         # Lever location est un string libre ; on essaie de filtrer la France
         if location and isinstance(location, str):
             if not re.search(r"\b(France|Paris|Toulouse|Bordeaux|Lyon|Nantes|Pau|Nancy|FR|EMEA|Remote)\b", location, re.IGNORECASE):
@@ -186,7 +198,7 @@ def _fetch_lever_jobs(slug: str, company_name: str, client: httpx.Client) -> lis
             url=offer_url,
             source=f"Portail entreprise - {company_name} (Lever)",
             description=desc_plain,
-            contract_type="Alternance" if "alterna" in title.lower() else None,
+            contract_type=_contract_type_for(title, desc_plain),
         ))
     return offers
 
@@ -203,7 +215,7 @@ def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -
             )
             return []
         data = r.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Greenhouse API exception (slug={slug}, company={c}) : {err}",
             slug=slug, c=company_name, err=str(e),
@@ -222,7 +234,7 @@ def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -
             from bs4 import BeautifulSoup as BS
             try:
                 desc = BS(content_html, "lxml").get_text(separator="\n", strip=True)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Fallback bénin : HTML brut au lieu du texte parsé.
                 logger.debug(
                     "Greenhouse BS parse KO (slug={slug}, fallback raw HTML) : {err}",
@@ -240,7 +252,7 @@ def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -
         offer_url = j.get("absolute_url") or ""
         if not offer_url:
             continue
-        contract = "Alternance" if re.search(r"altern|apprent|professionnali[sz]", title.lower()) else None
+        # contract_type via le helper centralisé (même regex que filter_alternance)
         offers.append(RawOffer(
             title=title,
             company=company_name,
@@ -248,7 +260,7 @@ def _fetch_greenhouse_jobs(slug: str, company_name: str, client: httpx.Client) -
             url=offer_url,
             source=f"Portail entreprise - {company_name} (Greenhouse)",
             description=desc[:5000] if desc else None,
-            contract_type=contract,
+            contract_type=_contract_type_for(title, desc),
         ))
     return offers
 
@@ -268,7 +280,7 @@ def _fetch_taleez_jobs(tenant: str, company_name: str, client: httpx.Client) -> 
                 s=r.status_code, t=tenant, c=company_name,
             )
             return []
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Taleez HTML exception (tenant={t}, company={c}) : {err}",
             t=tenant, c=company_name, err=str(e),
@@ -302,7 +314,7 @@ def _fetch_taleez_jobs(tenant: str, company_name: str, client: httpx.Client) -> 
             company=company_name,
             url=full_url,
             source=f"Portail entreprise - {company_name} (Taleez)",
-            contract_type="Alternance",
+            contract_type=_contract_type_for(text),
         ))
         if len(offers) >= 30:
             break
@@ -333,7 +345,7 @@ def _fetch_phenom_jobs(url: str, company_name: str, client: httpx.Client) -> lis
             if r.status_code == 200 and r.text.strip().startswith(("{", "[")):
                 data = r.json()
                 break
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Endpoint Phenom non disponible / mauvais format → on essaie le suivant
             logger.debug("Phenom endpoint KO ep={ep} err={err}", ep=ep, err=str(e))
             continue
@@ -370,7 +382,7 @@ def _fetch_phenom_jobs(url: str, company_name: str, client: httpx.Client) -> lis
             city=str(city) if city else None,
             url=offer_url or url,
             source=f"Portail entreprise - {company_name} (Phenom)",
-            contract_type="Alternance",
+            contract_type=_contract_type_for(title),
         ))
     return offers
 
@@ -405,7 +417,7 @@ def _fetch_workday_jobs(url: str, company_name: str, client: httpx.Client) -> li
             )
             return []
         data = r.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Workday API exception (tenant={t}, site={site}, company={c}) : {err}",
             t=tenant, site=site, c=company_name, err=str(e),
@@ -430,7 +442,7 @@ def _fetch_workday_jobs(url: str, company_name: str, client: httpx.Client) -> li
             city=city,
             url=offer_url,
             source=f"Portail entreprise - {company_name} (Workday)",
-            contract_type="Alternance" if "alterna" in title.lower() else None,
+            contract_type=_contract_type_for(title),
         ))
     return offers
 
@@ -465,7 +477,7 @@ def _fetch_playwright_page(url: str, company_name: str) -> list[RawOffer]:
             page.wait_for_timeout(3_000)
             html = page.content()
             page.close()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Playwright fallback KO (url={url}, company={c}) : {err}",
             url=url, c=company_name, err=str(e),
@@ -501,7 +513,7 @@ def _fetch_playwright_page(url: str, company_name: str) -> list[RawOffer]:
             company=company_name,
             url=full_url,
             source=f"Portail entreprise - {company_name} (Playwright)",
-            contract_type="Alternance",
+            contract_type=_contract_type_for(text),
         ))
         if len(offers) >= 20:
             break
@@ -519,7 +531,7 @@ def _fetch_generic_career_page(url: str, company_name: str, client: httpx.Client
                 url=url, s=r.status_code, n=len(r.text),
             )
             return []
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "Generic career page exception (url={url}, company={c}) : {err}",
             url=url, c=company_name, err=str(e),
@@ -560,7 +572,7 @@ def _fetch_generic_career_page(url: str, company_name: str, client: httpx.Client
             company=company_name,
             url=full_url,
             source=f"Portail entreprise - {company_name}",
-            contract_type="Alternance",
+            contract_type=_contract_type_for(text),
         ))
         if len(offers) >= 20:  # cap par portail pour éviter spam
             break
@@ -649,7 +661,7 @@ def scrape_target_company_portals(
                                 raw_offers = _fetch_greenhouse_jobs(
                                     embedded_slug, company_name, client
                                 )
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.debug(
                             "Greenhouse embed detection KO company={c} url={u} err={err}",
                             c=company_name, u=url, err=str(e),
@@ -659,7 +671,7 @@ def scrape_target_company_portals(
                     # Dernier recours : Playwright pour SPAs React qui n'ont rien donné
                     if not raw_offers and use_playwright_fallback:
                         raw_offers = _fetch_playwright_page(url, company_name)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Échec global du dispatcher pour ce portail — on log pour debug
                 logger.warning(
                     "Portail dispatch KO company={c} url={u} err={err}",
@@ -690,7 +702,7 @@ def scrape_target_company_portals(
                         inserted += 1
                     else:
                         dup += 1
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     # Log au lieu d'avaler : permet de debug les pbs d'insert
                     # (URL trop longue, dedup_key conflict, contrainte DB...)
                     logger.warning(

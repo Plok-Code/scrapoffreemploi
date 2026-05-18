@@ -20,13 +20,31 @@ from backend import queries
 from backend._logging import logger
 from backend.db import db
 
-
 # Mots-clés alternance — PRÉSENT = on garde même si CDI cohabite
 _KEEP_PATTERN = re.compile(
     r"\b(?:alternan[ct]e?s?|apprenti(?:[\(e]?[s]?)?|apprentissage|"
     r"contrat\s*pro(?:fessionnali[sz]ation)?|professionnali[sz]ation)\b",
     re.IGNORECASE,
 )
+
+
+def is_alternance_indicator(text: str | None) -> bool:
+    """Retourne True si `text` contient un indicateur explicite d'alternance.
+
+    Utilisé par les scrapers portail (Workable / Lever / Greenhouse / Workday /
+    Taleez / Phenom) pour décider du `contract_type` : "Alternance" UNIQUEMENT
+    si le titre/description le prouve. Sans evidence, on laisse `None` et c'est
+    `classify_offer()` qui tranche post-scrape.
+
+    Source unique de vérité (même regex que `_KEEP_PATTERN` utilisée par
+    `classify_offer`). Audit user (19 mai 2026) : avant ce helper, les portails
+    forçaient `contract_type="Alternance"` même sans evidence, ce qui faisait
+    KEEP côté `classify_offer` (étape 2 contract_type) même pour des titres
+    "Data Engineer Senior CDI". Bug désormais impossible.
+    """
+    if not text:
+        return False
+    return bool(_KEEP_PATTERN.search(text))
 
 # Marqueurs explicites de NON-alternance (titre prioritaire sur description).
 # Si UN seul match dans le TITRE + pas de _KEEP_PATTERN → rejet.

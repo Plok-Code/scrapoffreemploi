@@ -16,7 +16,6 @@ from typing import Optional
 
 from backend import queries
 from backend.db import db
-from backend.models import label_for_score
 
 ROOT = Path(__file__).resolve().parent.parent
 BATCHES_DIR = ROOT / "data" / "batches"

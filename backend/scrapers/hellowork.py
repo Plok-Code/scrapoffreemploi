@@ -23,7 +23,9 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from backend.scrapers._http import (
-    get_with_retry, http_client, polite_sleep,
+    get_with_retry,
+    http_client,
+    polite_sleep,
 )
 from backend.scrapers._jsonld import (
     extract_jobposting_description,
@@ -112,7 +114,7 @@ class HelloWorkScraper(Scraper):
                 offer = self._parse_card(card)
                 if offer:
                     offers.append(offer)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 # Structure inattendue dans une card : skip + log debug
                 # (debug, pas warning, car peut arriver souvent sur structure HelloWork mouvante)
                 _log.debug(

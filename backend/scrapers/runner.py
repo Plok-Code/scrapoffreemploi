@@ -1,11 +1,12 @@
 ﻿"""Orchestrateur de scraping : lance un scraper, insère en DB, génère le batch."""
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 
 import httpx
 
-from backend import matching, queries
+from backend import queries
 from backend._logging import logger
 from backend.db import db
 from backend.scrapers._http import DEFAULT_HEADERS, polite_sleep
@@ -93,7 +94,12 @@ def run_scrape(
                 "description": raw.description,
                 "date_published": raw.date_published,
                 "remote": raw.remote,
-                "contract_type": raw.contract_type or "Alternance",
+                # PAS de fallback "Alternance" : si le scraper ne sait pas,
+                # on laisse None et `filter_non_alternance_offers` (post-scrape)
+                # tranche d'après title + description. Audit user 19 mai 2026 :
+                # le `or "Alternance"` forçait `classify_offer` à KEEP via la
+                # branche contract_type même pour des titres "Senior CDI".
+                "contract_type": raw.contract_type,
                 "salary": raw.salary,
             }
             for raw in raw_offers
@@ -105,7 +111,7 @@ def run_scrape(
             from backend.matching import export_batch_to_score
             path = export_batch_to_score(offer_ids=new_ids)
             batch_path = str(path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # On capture l'erreur pour pouvoir l'enregistrer dans `scrape_runs`,
         # puis on relève — le caller (CLI ou _run_scrape_bg) décide quoi
         # afficher / comment réagir.
@@ -235,7 +241,7 @@ def enrich_descriptions(
         scraper = scraper_cache[src]
         try:
             desc = scraper.fetch_detail(off["url"])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # NE PAS avaler silencieusement : log l'offre + l'erreur complète.
             # Permet de diagnostiquer un changement de design HTML qui casse le scraper.
             logger.warning(
@@ -284,7 +290,6 @@ _INCONCLUSIVE_STATUS = {401, 403, 429, 500, 502, 503, 504}
 # Patterns regex (sur body en minuscules) qui indiquent un "soft 404" :
 # le serveur renvoie 200 mais l'offre est en réalité supprimée.
 # Ordre = du plus spécifique au plus générique.
-import re as _re
 _SOFT_404_PATTERNS = [
     _re.compile(p, _re.IGNORECASE) for p in [
         r"cette offre n[''e]?\s*est plus disponible",
@@ -372,7 +377,7 @@ def _probe_workday_api(detail_url: str, client: httpx.Client) -> bool | None:
             return False
         if 200 <= r.status_code < 300:
             return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     return None
 
@@ -404,11 +409,23 @@ def _is_soft_404(html: str, *, original_url: str, final_url: str) -> bool:
         for pat in _FINAL_URL_DEAD_PATTERNS:
             if pat.search(final_url):
                 return True
-        # Heuristique : redirect d'une URL longue (offre individuelle) vers une URL
-        # significativement plus courte (probable redirect vers la liste/home)
-        # → on ne déclenche que si la URL finale est < 50% de l'originale.
-        if len(final_url) < len(original_url) * 0.5:
-            return True
+        # Heuristique de redirect drastique : URL finale BEAUCOUP plus courte
+        # que l'originale = probable redirect vers home/login/liste générique.
+        #
+        # Seuil 30% (durci depuis 50% — audit user 19 mai 2026) :
+        # - Canonical redirect typique tombe à 70-80% de l'original → KEEP alive
+        # - Redirect login/home tombe à 10-30% → SOFT 404
+        # ET on exige que l'URL finale ne contienne PAS de marqueur d'offre
+        # individuelle (`/jobs/`, `/offers/`, `/offre/`, `/job/`, `/position/`,
+        # `/role/`) — si elle en contient, c'est un redirect vers une autre
+        # offre légitime (Workable / Lever fait ça parfois), pas une mort.
+        if len(final_url) < len(original_url) * 0.3:
+            if not _re.search(
+                r"/(?:jobs?|offres?|offer|position|role|career|emploi[s]?)/",
+                final_url,
+                _re.IGNORECASE,
+            ):
+                return True
 
     # 3. Title
     title = _title_text(html)
@@ -497,7 +514,7 @@ def check_alive(
             try:
                 resp = client.get(url)
                 status = resp.status_code
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(
                     "check_alive HTTP error offer_id={oid} url={url} err={err}",
                     oid=off["id"], url=url, err=str(e),
@@ -607,7 +624,7 @@ def cleanup_dead_unstatused(
                 # HTTP check
                 try:
                     resp = client.get(url)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.debug(
                         "cleanup_dead HTTP error offer_id={oid} url={url} err={err}",
                         oid=off["id"], url=url, err=str(e),
@@ -713,7 +730,7 @@ def run_full_scrape(
             r = run_scrape(src, max_pages=max_pages, generate_batch=False)
             per_source[src] = r
             total_new += r.total_new
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Loguer le traceback complet dans errors.log avant de continuer
             # sur le scraper suivant — sinon un seul `str(e)` en DB rend le
             # diagnostic impossible (ex : changement de design HTML, OAuth KO).
@@ -743,7 +760,7 @@ def run_full_scrape(
             portals_attempted = pr.portals_attempted
             portals_inserted = pr.new_offers_inserted
             total_new += pr.new_offers_inserted
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Échec global du scrape de portails — log traceback complet dans
             # errors.log pour diagnostiquer (changement Workable/Lever/Workday).
             logger.opt(exception=True).warning(

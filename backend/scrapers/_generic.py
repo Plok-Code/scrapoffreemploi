@@ -67,14 +67,14 @@ class GenericScraper(Scraper):
 
     source_name = "Generic"
 
-    def fetch_list(self, *, keywords: list[str], max_pages: int = 5) -> list[RawOffer]:  # noqa: ARG002
+    def fetch_list(self, *, keywords: list[str], max_pages: int = 5) -> list[RawOffer]:
         return []
 
     def fetch_detail(self, url: str) -> str | None:
         with http_client() as client:
             try:
                 resp = get_with_retry(client, url)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return None
             if resp.status_code != 200:
                 return None

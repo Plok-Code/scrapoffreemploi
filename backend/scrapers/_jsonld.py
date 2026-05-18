@@ -22,7 +22,6 @@ import re
 
 from bs4 import BeautifulSoup
 
-
 # Seuil minimum pour considérer une description "valide" — en dessous
 # c'est probablement un fragment vide / un placeholder.
 _MIN_DESC_LEN = 200

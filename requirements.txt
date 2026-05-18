@@ -16,7 +16,8 @@ playwright==1.56.0
 tenacity==9.0.0      # retries avec exponential backoff
 loguru==0.7.3        # logging structuré (rotation, format, niveau)
 
-# Tests + sécurité statique
+# Tests + sécurité statique + lint
 pytest>=9.0.3        # fix CVE-2025-71176
 pytest-asyncio>=1.0.0  # compat pytest 9
 bandit>=1.8          # analyse sécurité statique (cf README §Qualité du code)
+ruff>=0.6            # lint + détection dead code (audit user a flaggé l'absence)
