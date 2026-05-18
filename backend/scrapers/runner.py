@@ -61,45 +61,73 @@ def run_scrape(
         "Scrape démarré : source={source} max_pages={max_pages}",
         source=source, max_pages=max_pages,
     )
+
+    # `get_scraper` HORS du try : une `KeyError` (source inconnue) est une erreur
+    # de config du caller, pas un échec de scrape — pas la peine de polluer
+    # `scrape_runs` avec.
     scraper = get_scraper(source)
-    raw_offers: list[RawOffer] = scraper.fetch_list(
-        keywords=keywords or DEFAULT_SEARCH_KEYWORDS,
-        max_pages=max_pages,
-    )
 
-    # Bulk insert : 1 seule transaction au lieu de N (gain x10-x50 sur 1000 offres).
-    payload = [
-        {
-            "title": raw.title,
-            "company": raw.company,
-            "city": raw.city,
-            "department": raw.department,
-            "source": raw.source,
-            "url": raw.url,
-            "description": raw.description,
-            "date_published": raw.date_published,
-            "remote": raw.remote,
-            "contract_type": raw.contract_type or "Alternance",
-            "salary": raw.salary,
-        }
-        for raw in raw_offers
-    ]
-    new_ids, duplicates = queries.insert_offers_bulk(payload)
+    # Variables de tracking, remplies au fur et à mesure pour que `finally`
+    # puisse appeler `record_scrape_run` même sur échec mid-scrape.
+    raw_offers: list[RawOffer] = []
+    new_ids: list[int] = []
+    duplicates = 0
+    batch_path: str | None = None
+    error_msg: str | None = None
 
-    batch_path = None
-    if generate_batch and new_ids:
-        # Génère un batch ne contenant QUE les nouvelles offres
-        from backend.matching import export_batch_to_score
-        path = export_batch_to_score(offer_ids=new_ids)
-        batch_path = str(path)
+    try:
+        raw_offers = scraper.fetch_list(
+            keywords=keywords or DEFAULT_SEARCH_KEYWORDS,
+            max_pages=max_pages,
+        )
 
-    queries.record_scrape_run(
-        sources=source,
-        total_fetched=len(raw_offers),
-        total_new=len(new_ids),
-        total_duplicates=duplicates,
-        batch_file=batch_path,
-    )
+        # Bulk insert : 1 seule transaction au lieu de N (gain x10-x50 sur 1000 offres).
+        payload = [
+            {
+                "title": raw.title,
+                "company": raw.company,
+                "city": raw.city,
+                "department": raw.department,
+                "source": raw.source,
+                "url": raw.url,
+                "description": raw.description,
+                "date_published": raw.date_published,
+                "remote": raw.remote,
+                "contract_type": raw.contract_type or "Alternance",
+                "salary": raw.salary,
+            }
+            for raw in raw_offers
+        ]
+        new_ids, duplicates = queries.insert_offers_bulk(payload)
+
+        if generate_batch and new_ids:
+            # Génère un batch ne contenant QUE les nouvelles offres
+            from backend.matching import export_batch_to_score
+            path = export_batch_to_score(offer_ids=new_ids)
+            batch_path = str(path)
+    except Exception as e:  # noqa: BLE001
+        # On capture l'erreur pour pouvoir l'enregistrer dans `scrape_runs`,
+        # puis on relève — le caller (CLI ou _run_scrape_bg) décide quoi
+        # afficher / comment réagir.
+        error_msg = str(e)
+        logger.opt(exception=True).warning(
+            "Scrape failed : source={s} fetched={f} new={n} err={err}",
+            s=source, f=len(raw_offers), n=len(new_ids), err=error_msg,
+        )
+        raise
+    finally:
+        # TOUJOURS historiser, même en cas d'échec — sans ça, un crash dans
+        # `fetch_list` (timeout, parse KO, API down) disparaissait du
+        # `scrape_runs` (audit user 19 mai 2026).
+        queries.record_scrape_run(
+            sources=source,
+            total_fetched=len(raw_offers),
+            total_new=len(new_ids),
+            total_duplicates=duplicates,
+            batch_file=batch_path,
+            error=error_msg,
+        )
+
     logger.info(
         "Scrape terminé : source={source} fetched={f} new={n} dup={d}",
         source=source, f=len(raw_offers), n=len(new_ids), d=duplicates,

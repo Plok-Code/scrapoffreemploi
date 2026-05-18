@@ -7,9 +7,15 @@ Lit data/source/candidatures_alternance_AI_Engineer.xlsx, qui contient 6 tables 
 Sépare les vrais statuts des notes "Comment postuler", nettoie le mojibake encoding.
 
 Le xlsx n'est PAS modifié (read-only).
+
+⚠️ SCRIPT DESTRUCTIF : fait `DELETE FROM offers` avant l'import. Pour éviter
+qu'un user perde 1000+ offres scrapées en relançant le quickstart par réflexe,
+le garde-fou `_check_safe_to_wipe` refuse de tourner si la table `offers`
+est déjà peuplée — il faut passer `--force` explicitement.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -180,10 +186,79 @@ def extract_companies_tables(ws, tables: dict) -> list[dict]:
     return result
 
 
-def run() -> None:
+def _count_existing_offers() -> int:
+    """Compte les offres en DB. Init le schéma si nécessaire (idempotent)."""
+    init_schema()
+    with db() as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM offers").fetchone()[0])
+
+
+def _check_safe_to_wipe(*, force: bool) -> tuple[bool, str | None]:
+    """Garde-fou destructif.
+
+    Refuse de wiper la table `offers` si elle est déjà peuplée, sauf si
+    `force=True`. Retourne `(safe, error_message)` :
+    - `(True, None)` : OK pour wiper (DB neuve OU --force).
+    - `(False, msg)` : refus, message d'erreur à afficher.
+
+    Pure-function, testable sans toucher au xlsx.
+    """
+    existing = _count_existing_offers()
+    if existing == 0:
+        return True, None
+    if force:
+        return True, None
+    # SAFE (B608) : message d'erreur user-facing (printé sur stderr), pas
+    # une query SQL. Bandit fait du keyword matching sur "DELETE FROM" dans
+    # les littéraux sans distinguer le contexte. `existing` est un `int`
+    # retourné par `_count_existing_offers()`, pas un input user.
+    msg = (
+        "REFUS : la table 'offers' contient déjà {n} ligne(s).\n"
+        "Ce script fait \"DELETE FROM offers\" avant l'import xlsx — perte\n"  # nosec B608
+        "de toutes les offres scrapées si tu continues.\n"
+        "\n"
+        "Si tu es SÛR de vouloir réinitialiser la DB depuis le xlsx :\n"
+        "    python -m backend.migrate_xlsx --force\n"
+        "\n"
+        "Sinon, tu cherches probablement :\n"
+        "    python cli.py scrape all      # rafraîchir les offres\n"
+        "    python -m backend             # démarrer l'app sans rien casser"
+    ).format(n=existing)
+    return False, msg
+
+
+def run(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m backend.migrate_xlsx",
+        description=(
+            "Import one-shot xlsx historique → SQLite. DESTRUCTIF : fait "
+            "DELETE FROM offers avant l'import. Requiert --force si la "
+            "table est déjà peuplée."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Confirme explicitement que tu veux ÉCRASER la table offers "
+            "actuelle (perte des données scrapées). Requis dès que la "
+            "table contient au moins 1 ligne."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    # ORDRE CRITIQUE : la garde anti-wipe AVANT le check xlsx. Si l'utilisateur
+    # a 1000 offres scrapées + xlsx introuvable, on veut afficher "REFUS, utilise
+    # --force" plutôt que "xlsx introuvable" — ça protège ses données même
+    # avant d'évaluer le scénario d'import.
+    safe, refusal = _check_safe_to_wipe(force=args.force)
+    if not safe:
+        print(refusal, file=sys.stderr)
+        return 2
+
     if not XLSX_PATH.exists():
         print(f"ERREUR : xlsx introuvable : {XLSX_PATH}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     print(f"Lecture de {XLSX_PATH}...")
     wb = load_workbook(XLSX_PATH, data_only=True)
@@ -193,11 +268,11 @@ def run() -> None:
     tables = dict(ws.tables.items())
     if "Table_1" not in tables:
         print("ERREUR : Table_1 introuvable", file=sys.stderr)
-        sys.exit(1)
+        return 1
     _, t1_min_row, _, t1_max_row = range_boundaries(tables["Table_1"])
     print(f"Table_1 (offres) : lignes {t1_min_row} à {t1_max_row}")
 
-    # Init du schéma
+    # Init du schéma (déjà fait par _check_safe_to_wipe → no-op ici)
     init_schema()
 
     # Lecture des lignes
@@ -209,6 +284,7 @@ def run() -> None:
             continue
 
         entreprise = cell_str(ws.cell(r, COL_ENTREPRISE))
+        ville = cell_str(ws.cell(r, COL_VILLE))
         url = cell_url(ws.cell(r, COL_URL))
         statut_raw = cell_str(ws.cell(r, COL_STATUT))
         statut_clean, methode = parse_statut_cell(statut_raw)
@@ -226,7 +302,7 @@ def run() -> None:
         rows.append({
             "title": titre,
             "company": entreprise,
-            "city": cell_str(ws.cell(r, COL_VILLE)),
+            "city": ville,
             "department": cell_str(ws.cell(r, COL_DEPARTEMENT)),
             "source": cell_str(ws.cell(r, COL_SOURCE)),
             "url": url,
@@ -240,7 +316,12 @@ def run() -> None:
             "match_score": match_score,
             "match_label": match_label,
             "contract_type": "Alternance",
-            "dedup_key": make_dedup_key(titre, entreprise),
+            # IMPORTANT : la ville fait partie de la clé (audit bug : Paris vs
+            # Toulouse = 2 offres distinctes). Sans ce 3e arg, l'import xlsx
+            # générait des `"titre|entreprise|"` qui ne matchaient PAS les
+            # `"titre|entreprise|paris"` produits par les scrapers — doublons
+            # silencieux au prochain scrape Hellowork/WTTJ.
+            "dedup_key": make_dedup_key(titre, entreprise, ville),
         })
 
     print(f"Lignes lues : {len(rows)}")
@@ -316,6 +397,8 @@ def run() -> None:
     )
     print(f"\nEntreprises 'candidature spontanee' extraites : {len(companies)} -> {COMPANIES_JSON}")
 
+    return 0
+
 
 if __name__ == "__main__":
-    run()
+    sys.exit(run())

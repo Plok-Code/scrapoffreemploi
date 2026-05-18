@@ -65,6 +65,7 @@ def cmd_apply_scores(args: argparse.Namespace) -> int:
 
 
 def cmd_scrape(args: argparse.Namespace) -> int:
+    from backend._logging import logger
     from backend.scrapers.registry import list_scrapers
     from backend.scrapers.runner import run_scrape
 
@@ -77,7 +78,23 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     try:
         result = run_scrape(source, max_pages=args.max_pages)
     except KeyError as e:
-        print(f"ERREUR : {e}", file=sys.stderr)
+        # Source inconnue (`get_scraper(source)` raise KeyError).
+        print(f"ERREUR : source inconnue : {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        # Échec réel du scrape (timeout, API down, parse KO…). `run_scrape`
+        # a déjà enregistré la ligne d'audit dans `scrape_runs` via le
+        # `finally` interne — on affiche juste un résumé user-friendly,
+        # le traceback est dans `data/logs/errors.log`.
+        print(f"ÉCHEC du scrape '{source}' : {e}", file=sys.stderr)
+        print(
+            "Détails dans data/logs/errors.log (traceback complet) et "
+            "scrape_runs (audit).",
+            file=sys.stderr,
+        )
+        logger.opt(exception=True).error(
+            "CLI scrape failed : source={s} err={err}", s=source, err=str(e),
+        )
         return 1
     print(f"  Fetched   : {result.total_fetched}")
     print(f"  Nouvelles : {result.total_new}")

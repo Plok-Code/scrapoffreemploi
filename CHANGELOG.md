@@ -6,6 +6,121 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Sprint qualité (19 mai 2026, 3e audit utilisateur) : 4 findings
+
+3e passe d'audit utilisateur. Sur 9 points levés, 4 étaient des **vrais bugs**
+ratés par mes 2 audits précédents (les 5 autres : déjà fixés sur la branche
+mais l'audit utilisait un checkout partiellement stale, ou trade-off
+explicitement assumé pour scope perso).
+
+#### Fix #2 — `migrate_xlsx` refuse de wiper sans `--force`
+
+`backend/migrate_xlsx.py` faisait `DELETE FROM offers` puis ré-importait 194
+offres du xlsx. Le README listait ce script en étape 3 du quickstart. Un user
+qui re-fait le quickstart par réflexe 6 mois plus tard perdait 1000+ offres
+scrapées (audit user 19 mai 2026).
+
+- **`backend/migrate_xlsx.py`** : refactor en `run(argv=None) -> int` avec
+  `argparse`. Nouveau `_check_safe_to_wipe(*, force)` qui :
+  - Retourne `(True, None)` si DB vide OU si `--force` passé.
+  - Retourne `(False, msg)` sinon, avec message d'erreur **actionnable**
+    (compte exact des lignes existantes, commande `--force` à copier-coller,
+    alternatives non destructives `python cli.py scrape all` / `python -m backend`).
+  - Pure-function, testable sans toucher au xlsx (utilisé par les tests).
+- **Garde-fou EN PREMIER** : le check `_check_safe_to_wipe` est exécuté
+  AVANT le check d'existence du xlsx. Si l'utilisateur a 1000 offres et que
+  le xlsx est absent, il voit "REFUS, use --force" plutôt que "xlsx introuvable"
+  — sa data est protégée même quand l'autre branche échouerait.
+- **Exit codes distincts** : `0` succès, `1` xlsx introuvable, `2` refus de
+  wipe. Un script wrapper peut distinguer les cas.
+- **`README.md`** : avertissement explicite à l'étape 3 du quickstart
+  ("REFUSE si DB peuplée — voir --help").
+- **`CLAUDE.md`** : commande mise à jour avec `--force` pour le cas
+  documenté "à re-lancer pour reset DB".
+- **`tests/test_migrate_xlsx_safety.py`** : 5 nouveaux tests
+  - DB vide sans `--force` → safe (quickstart d'un nouveau user).
+  - DB vide avec `--force` → safe (idempotent).
+  - DB peuplée sans `--force` → REFUS + message contenant `--force` et
+    "DELETE FROM offers" + le count exact.
+  - DB peuplée avec `--force` → safe explicite.
+  - `run([])` sur DB peuplée → exit code 2 (distinct de 1).
+
+#### Fix #3 — `migrate_xlsx` passe `city` à `make_dedup_key`
+
+L'appel `make_dedup_key(titre, entreprise)` produisait `"titre|entreprise|"`
+(city vide) alors que les scrapers font `make_dedup_key(title, company, city)`
+→ `"titre|entreprise|paris"`. Après ré-import xlsx, le prochain scrape ne
+déduplicait PAS contre les offres xlsx → doublons silencieux.
+
+- **`backend/migrate_xlsx.py:243`** : `make_dedup_key(titre, entreprise, ville)`,
+  variable `ville` extraite explicitement de `COL_VILLE` au-dessus.
+- **`tests/test_migrate_xlsx_dedup_key.py`** : 2 nouveaux tests
+  - Verrouille que `make_dedup_key` produit des clés différentes pour Paris
+    vs Toulouse (sanity du helper, déjà couvert mais ré-asserté).
+  - **Garde-fou par introspection AST** : grep le source de `migrate_xlsx`
+    pour `make_dedup_key(…)` et compte les arguments. Si quelqu'un régresse
+    à 2 args (le bug original), le test échoue avec un message explicite.
+
+#### Fix #6 — `run_scrape` historise les échecs dans `scrape_runs`
+
+`runner.run_scrape` appelait `queries.record_scrape_run(…)` uniquement après
+succès. Si `scraper.fetch_list()` raise (timeout, API down, parse KO),
+l'exception propageait sans audit row. Conséquence : `scrape_runs` vide
+alors que l'utilisateur a lancé un scrape.
+
+- **`backend/scrapers/runner.py:run_scrape`** : refactor en `try/except/finally`.
+  - `get_scraper(source)` reste HORS du `try` (KeyError = config error, pas
+    un échec de scrape — pas la peine de polluer l'audit).
+  - Variables de tracking (`raw_offers`, `new_ids`, `duplicates`, `batch_path`,
+    `error_msg`) initialisées avant le try → le `finally` peut toujours
+    appeler `record_scrape_run` avec les compteurs partiels au moment du
+    crash.
+  - `except` capture `str(e)` dans `error_msg`, log le traceback complet
+    via `logger.opt(exception=True).warning(…)`, puis `raise` pour que le
+    caller voie l'erreur.
+  - `finally` appelle TOUJOURS `record_scrape_run` (succès → `error=None`,
+    échec → `error=str(e)`).
+- **`cli.py:cmd_scrape`** : `except Exception` broaden — affiche un résumé
+  user-friendly + pointe vers `data/logs/errors.log` pour le traceback complet
+  et vers `scrape_runs` pour l'audit. Évite le crash brut de l'ancien code
+  qui ne catchait que `KeyError`.
+- **`tests/test_run_scrape_audit_failure.py`** : 4 nouveaux tests
+  - `fetch_list` raise → 1 row dans `scrape_runs` avec `error` rempli.
+  - Source inconnue (`get_scraper` KeyError) → AUCUN row (pas pollué).
+  - Path succès → row avec `error=None`.
+  - Échec partiel (fetch OK + insert OK + batch KO) → compteurs partiels
+    préservés (`total_fetched=1, total_new=1`) + error rempli.
+
+#### Fix #9 — `schema.sql` aligné sur post-migration 002
+
+`schema.sql` se documentait comme "vue synthétique du schéma actuel (état
+après toutes les migrations appliquées)" mais ne contenait aucun `CHECK`
+constraint, alors que la migration 002 en a ajouté ~10. Documentation
+menteuse.
+
+- **`backend/schema.sql`** : ajout des CHECK pour `remote`, `match_score`,
+  `score_*` (5 axes), `match_label`, `status`, `priority`, `is_active` sur
+  `offers` ET `priority` + `status` sur `target_companies`. Chaque CHECK
+  annoté `-- migration 002 : enum/borne` pour traçabilité. Header mis à
+  jour avec mention du test de drift (futur).
+- **`scrape_runs.error`** : commentaire ajouté pour clarifier qu'il sert
+  aussi à historiser les échecs (cohérent avec Fix #6).
+
+#### Bilan
+
+- `pytest tests/ -q` en venv propre : **391 passed in 16.05s** (380 → 391
+  = +11 nouveaux : 5 safety + 2 dedup_key + 4 audit failure).
+- `bandit -r backend cli.py` en venv : **0 issues, exit 0** (1 false-positive
+  bandit sur f-string contenant "DELETE FROM" dans un message d'erreur
+  user-facing → annoté `# SAFE (B608)` + restructuré en `.format()` pour
+  cibler le `# nosec` sur la ligne exacte).
+- E2E live :
+  - App `/api/stats` répond 200 avec les valeurs prod (1189 actives).
+  - `python -m backend.migrate_xlsx` (sans `--force`) refuse avec exit 2 :
+    `"REFUS : la table 'offers' contient déjà 1207 ligne(s)…"`.
+- Backward compat : nouveau user avec DB vide peut toujours lancer le
+  quickstart sans flag.
+
 ### Fixed — Sprint qualité (19 mai 2026 soir) : 5 findings 2e audit utilisateur
 
 2e passe d'audit utilisateur après le push des 8 fixes précédents → 5 vrais

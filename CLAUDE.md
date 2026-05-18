@@ -22,8 +22,8 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Migration xlsx -> SQLite (déjà fait, à re-lancer pour reset DB)
-$env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
+# Migration xlsx -> SQLite (déjà fait — DESTRUCTIF, requiert --force si DB peuplée)
+$env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx --force
 
 # Lancer l'app
 .\run.ps1

@@ -19,7 +19,11 @@ pip install -r requirements.lock
 #    b. Contraintes lâches (dev, peut récupérer des minor bumps) :
 pip install -r requirements.txt
 
-# 3. Migrer l'ancien xlsx vers SQLite (une seule fois)
+# 3. Migrer l'ancien xlsx vers SQLite — UNE SEULE FOIS au premier setup.
+# ⚠️ Ce script fait `DELETE FROM offers` avant l'import. Sur une DB déjà
+# peuplée (ex tu re-fais le quickstart par réflexe 6 mois plus tard),
+# il REFUSE de tourner et te demande `--force` explicite — pas de
+# perte de données scrapées par accident. Voir `python -m backend.migrate_xlsx --help`.
 $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 
 # 4. Lancer l'app
