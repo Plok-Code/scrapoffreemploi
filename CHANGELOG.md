@@ -6,6 +6,98 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Sprint qualité (19 mai 2026 soir) : 5 findings 2e audit utilisateur
+
+2e passe d'audit utilisateur après le push des 8 fixes précédents → 5 vrais
+problèmes que j'avais ratés (le rollback migrations étant déjà fixé,
+l'audit était sur état partiellement stale). Méthodologie en cause :
+pas de static linter (vulture/ruff RUF013), pas d'analyse data-flow
+cross-fonctions, pas de doc-vs-code diff, pas de fuzz parsers.
+
+#### Fix #2 — `export_batch_to_score` exclut les offres archivées par défaut
+
+Bug le plus impactant. Dans `run_full_scrape` :
+
+1. Scrape multi-source → collecte `new_ids` (toutes is_active=1).
+2. `filter_non_alternance_offers()` → archive (`is_active=0`) certains des
+   nouveaux IDs qui sont en fait du CDI déguisé.
+3. **Avant ce fix** : `export_batch_to_score(offer_ids=new_ids)` envoyait
+   QUAND MÊME ces IDs archivés au LLM → tokens gaspillés, scoring d'offres
+   déjà rejetées.
+
+Le commentaire pré-existant `runner.py:743-744` *affirmait* que `matching.py`
+filtrait les non-existantes — vrai pour les DELETE mais FAUX pour les
+archivées. Mensonge inadvertant qui a contribué à mon manque de vigilance
+sur ce flux.
+
+- **`backend/matching.py:export_batch_to_score`** : nouveau kwarg
+  `include_archived: bool = False`. La clause WHERE devient une `list`
+  de fragments — `(is_active IS NULL OR is_active = 1)` est appliqué
+  AVANT toutes les autres branches sauf si `include_archived=True`.
+  Couvre les 3 paths : `offer_ids=[…]`, `only_unscored=True`, et le
+  default sans filtre.
+- **`backend/scrapers/runner.py`** : commentaire menteur remplacé par
+  un commentaire qui explique le piège et la mitigation.
+- **`tests/test_matching.py`** : nouvelle classe `TestExportBatchExcludesArchived`
+  (3 cas) : scénario réel run_full_scrape (offer_ids contient une archivée
+  → exclue), path `only_unscored` (3 offres unscored dont 1 archivée →
+  archivée exclue), escape-hatch `include_archived=True` (archivée
+  réincluse).
+
+#### Fix #4 — `parse_scores_file` valide `raw["scores"]` est une liste
+
+Reproduction : `scores: null` → `TypeError: NoneType is not iterable`,
+opaque au caller CLI qui ne catche que `ValueError`.
+
+- **`backend/matching.py:parse_scores_file`** : ajout d'un check explicite
+  `isinstance(scores_raw, list)` avec `ValueError` proprement formaté
+  (`"'scores' doit être une liste, reçu NoneType"`). Idem pour les items
+  individuels (`isinstance(item, dict)` avec ValueError au lieu de
+  l'AttributeError opaque sur `"foo".get(...)`).
+- **`tests/test_matching.py`** : nouvelle classe `TestParseScoresFileValidation`
+  (6 cas) : scores=null, scores="abc", scores={"foo":"bar"}, scores=42,
+  items non-dict, liste vide (valide).
+
+#### Fix #5 — `run_scrape` a maintenant une vraie `__doc__`
+
+[`runner.py:52`](backend/scrapers/runner.py:52) avait `logger.info(...)` AVANT
+le triple-quoted, donc Python traitait le triple-quoted comme une
+statement-expression jetée. `help(run_scrape)` retournait None.
+
+- **`backend/scrapers/runner.py:run_scrape`** : le triple-quoted (docstring)
+  est désormais la PREMIÈRE statement de la fonction, `logger.info` vient
+  après. Vérifié live : `run_scrape.__doc__` retourne maintenant la doc
+  attendue.
+
+#### Fix #6 — Suppression du paramètre mort `only_unscored_or_scored`
+
+`check_alive(only_unscored_or_scored: bool = True, …)` : aucun caller ne
+le passait, aucune ligne du corps de la fonction ne le lisait. Code mort.
+
+- **`backend/scrapers/runner.py:check_alive`** : signature nettoyée à
+  `(*, min_score, sleep_between, limit)`. Tests existants (`test_bulk_alive.py`)
+  passaient juste `sleep_between=0.0` → aucune régression.
+
+#### Fix #3b — CLAUDE.md:218 reflète le default `archive`, pas `delete`
+
+Le doc disait "URL morte + status NULL → DELETE", mais `cleanup_dead_unstatused`
+a `hard_delete_unstatused=False` en défaut → archive systématique. Le DELETE
+n'arrive qu'en opt-in explicite.
+
+- **`CLAUDE.md`** : reformulé en 2 lignes (défaut archive, opt-in delete)
+  pour ne plus induire en erreur.
+
+#### Bilan
+
+- `pytest tests/ -q` en venv propre : **380 passed in 14.98s** (371 → 380
+  = +9 tests : 3 archived filter + 6 validation parse_scores_file).
+- `bandit -r backend cli.py` en venv : **0 issues, exit 0**.
+- Vérifié live : `run_scrape.__doc__` non-None, `check_alive` signature
+  n'expose plus `only_unscored_or_scored`.
+- Backward compat 100% : aucun caller existant ne passait les kwargs
+  modifiés (`include_archived` ajouté avec défaut, `only_unscored_or_scored`
+  mort supprimé sans casser personne).
+
 ### Fixed — Sprint qualité (19 mai 2026) : 8 findings audit utilisateur
 
 Audit utilisateur après push P0+P1 → 8 vrais problèmes flaggés, tous corrigés.

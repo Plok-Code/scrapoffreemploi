@@ -215,7 +215,8 @@ Le champ séparé `application_method` (libre) sert pour les notes "Portail offi
    - Title : `erreur.*inexistante`, `current openings`, `404`
    - URL finale après redirects : `?not_found=true`, `trk=expired_jd_redirect`, ou URL < 50% de l'original
    - Workday : probe API JSON dédiée `/wday/cxs/{tenant}/{site}/job/{id}`
-   - **Action** : si `status=NULL` → `DELETE` ; si `status≠NULL` → `is_active=0` (préserve l'historique applicatif)
+   - **Action (défaut)** : `is_active=0` pour TOUTES les URLs mortes (préserve l'historique applicatif des offres status≠NULL ET garde une trace des autres pour audit).
+   - **Action (opt-in `hard_delete_unstatused=True`)** : si `status=NULL` → `DELETE` définitif ; si `status≠NULL` → `is_active=0` quand même (jamais de delete sur un dossier où l'utilisateur a postulé).
 
 2. **Scrape job boards** (FT API + WTTJ Algolia + HelloWork HTML)
 3. **Scrape portails entreprises** (Workable/Lever/Workday/Greenhouse/Taleez/Phenom/Playwright)

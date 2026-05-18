@@ -53,6 +53,7 @@ def export_batch_to_score(
     *,
     only_unscored: bool = True,
     offer_ids: list[int] | None = None,
+    include_archived: bool = False,
     limit: int | None = None,
     output_path: Path | None = None,
 ) -> Path:
@@ -68,6 +69,14 @@ def export_batch_to_score(
                    - None (défaut) → fall through à `only_unscored`.
                    Utile pour batcher juste les nouvelles offres d'un scrape
                    (combo avec `run_full_scrape(generate_batch=True)`).
+        include_archived: si False (défaut), exclut les offres `is_active=0`
+                       (URL morte, filtre alternance, "Pas intéressé"). Évite
+                       de gaspiller des tokens LLM sur des offres déjà
+                       disqualifiées. CRITIQUE pour le combo `run_full_scrape` :
+                       `filter_non_alternance_offers` peut archiver certaines
+                       des `new_ids` du scrape juste avant la génération du
+                       batch — sans ce filtre, le LLM scorait des offres
+                       qu'on venait de rejeter (audit user, 19 mai 2026).
         limit: nombre max d'offres à inclure (None = toutes).
         output_path: chemin de sortie. Si None, génère `data/batches/{date}_to_score.json`.
 
@@ -78,28 +87,34 @@ def export_batch_to_score(
     if output_path is None:
         output_path = _default_batch_path()
 
-    where = ""
+    # Construit la clause WHERE comme une liste de fragments littéraux + un
+    # éventuel `id IN (?,?,…)` parametrized. Ajout du filtre actif par défaut
+    # AVANT tout le reste pour qu'il s'applique à toutes les autres branches.
+    where_parts: list[str] = []
     params: list[int] = []
+    if not include_archived:
+        where_parts.append("(is_active IS NULL OR is_active = 1)")
+
     if offer_ids is not None:
         if offer_ids:
-            # Filtre par ids — placeholders `?` un par id (pas d'input user dans le SQL)
             placeholders = ",".join("?" * len(offer_ids))
-            where = f"WHERE id IN ({placeholders})"  # nosec B608
+            where_parts.append(f"id IN ({placeholders})")
             params = [int(i) for i in offer_ids]
         else:
-            # Liste explicitement vide : résultat vide (distinct de None = pas de filtre)
-            where = "WHERE 1 = 0"
+            # Liste explicitement vide : résultat vide (distinct de None = pas de filtre).
+            where_parts.append("1 = 0")
     elif only_unscored:
         # "Pas scoré" OU "scoré par l'ancien regex" (= avant la grille v1.0,
-        # donc avec match_score mais SANS les 5 sous-scores)
-        where = "WHERE match_score IS NULL OR score_pipeline IS NULL"
-    else:
-        where = ""
+        # donc avec match_score mais SANS les 5 sous-scores).
+        where_parts.append("(match_score IS NULL OR score_pipeline IS NULL)")
 
-    # OFFER_FIELDS_FOR_BATCH est une constante module-level (tuple de noms de
-    # colonnes hardcodés), `where` est construit ci-dessus depuis des fragments
-    # littéraux + placeholders. Aucun input user dans le SQL.
-    sql = f"SELECT {', '.join(OFFER_FIELDS_FOR_BATCH)} FROM offers {where} ORDER BY id ASC"  # nosec B608
+    where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    # SAFE (B608) : `OFFER_FIELDS_FOR_BATCH` est une constante module-level
+    # (tuple de noms de colonnes hardcodés). `where` est construit ci-dessus
+    # uniquement depuis des fragments littéraux + placeholders `?`. Aucun
+    # input user n'est interpolé dans le SQL. Les valeurs partent via `params`.
+    sql = f"SELECT {', '.join(OFFER_FIELDS_FOR_BATCH)} FROM offers{where} ORDER BY id ASC"  # nosec B608
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -149,8 +164,23 @@ def parse_scores_file(path: Path) -> list[dict]:
     if not isinstance(raw, dict) or "scores" not in raw:
         raise ValueError(f"Format invalide : {path} doit contenir une clé 'scores'.")
 
+    # Garde-fou : `raw["scores"]` doit être une LISTE. Sans ce check explicite,
+    # `for item in raw["scores"]` lève un `TypeError` opaque sur `null` ou un
+    # `AttributeError` sur les items non-dict — le caller CLI ne catch que
+    # `ValueError` proprement (audit user 19 mai 2026).
+    scores_raw = raw["scores"]
+    if not isinstance(scores_raw, list):
+        raise ValueError(
+            f"Format invalide : {path} 'scores' doit être une liste, "
+            f"reçu {type(scores_raw).__name__}."
+        )
+
     scores: list[dict] = []
-    for item in raw["scores"]:
+    for item in scores_raw:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Score doit être un dict, reçu {type(item).__name__} : {item!r}"
+            )
         if "offer_id" not in item:
             raise ValueError(f"Score sans offer_id : {item}")
         # Validation des bornes /20

@@ -49,8 +49,6 @@ def run_scrape(
     max_pages: int = 3,
     generate_batch: bool = True,
 ) -> ScrapeResult:
-    logger.info("Scrape démarré : source={source} max_pages={max_pages}",
-                source=source, max_pages=max_pages)
     """Lance le scraper d'une source, insère en DB, optionnellement génère le batch JSON.
 
     Args:
@@ -59,6 +57,10 @@ def run_scrape(
         max_pages: pagination max par mot-clé.
         generate_batch: si True, génère data/batches/{date}_to_score.json après.
     """
+    logger.info(
+        "Scrape démarré : source={source} max_pages={max_pages}",
+        source=source, max_pages=max_pages,
+    )
     scraper = get_scraper(source)
     raw_offers: list[RawOffer] = scraper.fetch_list(
         keywords=keywords or DEFAULT_SEARCH_KEYWORDS,
@@ -399,7 +401,6 @@ def _is_soft_404(html: str, *, original_url: str, final_url: str) -> bool:
 
 def check_alive(
     *,
-    only_unscored_or_scored: bool = True,
     min_score: int | None = None,
     sleep_between: float = 0.8,
     limit: int | None = None,
@@ -740,8 +741,14 @@ def run_full_scrape(
 
     # Génération d'un batch JSON pour scoring LLM manuel — uniquement les
     # nouvelles offres de ce run (agrège new_ids de tous les scrapers).
-    # Le filtre alternance peut avoir supprimé/archivé certaines de ces nouvelles
-    # offres, mais matching.py filtre déjà les non-existantes au format.
+    #
+    # Important : `filter_non_alternance_offers()` (étape précédente) peut
+    # avoir DELETE ou ARCHIVÉ (`is_active=0`) certaines des `new_ids`. Les
+    # DELETE disparaissent du SELECT naturellement. Les archivées, elles,
+    # restent dans la table — d'où le défaut `include_archived=False` de
+    # `export_batch_to_score` qui les exclut. Sans ce filtre, on enverrait
+    # au LLM des offres qu'on vient de rejeter (gaspillage tokens + risque
+    # d'écraser un score utile, audit user 19 mai 2026).
     batch_file: str | None = None
     if generate_batch:
         new_ids: list[int] = []
