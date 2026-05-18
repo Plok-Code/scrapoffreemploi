@@ -7,7 +7,7 @@ jinja2>=3.1.6              # fix CVE-2024-56326, CVE-2024-56201, CVE-2025-27516
 python-multipart>=0.0.27   # fix CVE-2026-24486, CVE-2026-40347, CVE-2026-42561
 pydantic==2.10.3
 openpyxl==3.1.5
-httpx==0.28.1
+httpx[http2]==0.28.1       # extra `http2` tire `h2` (utilisé par scrapers/_http.py:http_client)
 beautifulsoup4==4.12.3
 lxml>=6.1.0                # fix CVE-2026-41066
 playwright==1.56.0
@@ -16,6 +16,7 @@ playwright==1.56.0
 tenacity==9.0.0      # retries avec exponential backoff
 loguru==0.7.3        # logging structuré (rotation, format, niveau)
 
-# Tests
+# Tests + sécurité statique
 pytest>=9.0.3        # fix CVE-2025-71176
 pytest-asyncio>=1.0.0  # compat pytest 9
+bandit>=1.8          # analyse sécurité statique (cf README §Qualité du code)

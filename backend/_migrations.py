@@ -144,9 +144,21 @@ def apply_migrations(conn_factory=None) -> list[MigrationFile]:
     )
 
     for mig in pending:
-        conn = conn_factory()
+        # CRITICAL : la connexion de migration doit être ouverte en
+        # `autocommit=False` (PEP 249 transaction control).
+        #
+        # En mode LEGACY_TRANSACTION_CONTROL (défaut Python 3.13),
+        # `Connection.executescript()` émet un **COMMIT implicite avant** de
+        # lancer le script (cf docs sqlite3). Un `BEGIN` explicite posé juste
+        # avant est donc commité immédiatement, et tout DDL exécuté à
+        # l'intérieur du script ne peut PLUS être rollback en cas d'erreur
+        # — d'où risque de migration à moitié appliquée.
+        #
+        # Avec `autocommit=False`, une transaction est implicitement ouverte
+        # avant la 1re statement et reste vivante pendant tout le script :
+        # `conn.rollback()` annule TOUTES les DDL si la moindre échoue.
+        conn = _open_migration_connection()
         try:
-            conn.execute("BEGIN")
             conn.executescript(mig.sql)
             conn.execute(
                 "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
@@ -167,6 +179,21 @@ def apply_migrations(conn_factory=None) -> list[MigrationFile]:
             conn.close()
 
     return applied_in_this_run
+
+
+def _open_migration_connection() -> sqlite3.Connection:
+    """Ouvre une connexion SQLite dédiée aux migrations (`autocommit=False`).
+
+    Lit `DB_PATH` au moment de l'appel pour rester compatible avec les tests
+    qui monkeypatchent `backend.db.DB_PATH` vers un tmp_path.
+    """
+    from backend.db import DB_PATH
+
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, autocommit=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def current_schema_version(conn_factory=None) -> int:

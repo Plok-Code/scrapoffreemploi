@@ -6,6 +6,93 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Sprint qualité (19 mai 2026) : 8 findings audit utilisateur
+
+Audit utilisateur après push P0+P1 → 8 vrais problèmes flaggés, tous corrigés.
+J'avais raté plusieurs d'entre eux dans ma propre passe (mea culpa). Le détail :
+
+#### Fix #1 — Rollback migrations cassé (BUG CRITIQUE, perte intégrité DB)
+
+`Connection.executescript()` en Python 3.13 émet un **COMMIT implicite avant**
+de lancer le script (mode `LEGACY_TRANSACTION_CONTROL`). Conséquence :
+le `conn.execute("BEGIN")` posé juste avant était commité immédiatement,
+et tout DDL exécuté à l'intérieur du script restait persisté en cas d'erreur
+SQL au milieu — migration à moitié appliquée, DB incohérente.
+
+- **`backend/_migrations.py`** : nouvelle fonction `_open_migration_connection()`
+  qui ouvre via `sqlite3.connect(DB_PATH, autocommit=False)`. En mode PEP 249,
+  une tx est ouverte implicitement avant la 1re statement et reste vivante
+  pendant tout l'`executescript` → `conn.rollback()` annule TOUTES les DDL si
+  la moindre échoue. Le `conn.execute("BEGIN")` explicite est retiré (devenait
+  inutile et même nuisible avec autocommit=False).
+
+- **`tests/test_migrations.py`** : 2 nouveaux tests qui ÉCHOUERAIENT pré-fix
+  - `test_multi_ddl_with_error_in_middle_rolls_back_partial` : 2 `CREATE TABLE`
+    valides + SQL invalide → assertEqual aucune table ne persiste.
+  - `test_multi_migration_atomicity` : v1 OK + v2 partielle → v1 persistée,
+    v2 entièrement rollbackée.
+  - Le test pré-existant `test_invalid_sql_rolls_back` était un faux-positif
+    (un seul statement invalide → erreur avant tout DDL, donc rien à rollback).
+
+#### Fix #2 + #8 — `h2` et `bandit` dans `requirements.txt`
+
+- `backend/scrapers/_http.py:53` utilise `httpx.Client(http2=True)` mais `h2`
+  n'était pas déclaré → `ImportError` en venv propre. `requirements.txt` :
+  `httpx==0.28.1` → `httpx[http2]==0.28.1` (l'extra tire `h2`).
+- `bandit` était mentionné dans le README sans être dans les deps → ajouté
+  `bandit>=1.8`.
+- **`requirements.lock`** régénéré via `pip-tools` dans un venv propre →
+  versions exactes : `pydantic==2.10.3` (au lieu de la 2.12.4 du global),
+  `h2==4.3.0`, `bandit==1.9.4`.
+
+#### Fix #3 — Tests reproductibles en venv propre
+
+- Validé en local : `python -m venv .venv` + `pip install -r requirements.lock`
+  → `pytest tests/ -q` = **371 passed in ~15s** avec `pydantic 2.10.3` et
+  `h2 4.3.0` réellement chargés (et plus la version global pollué).
+- `bandit -r backend cli.py` en venv = **0 issues, exit 0**.
+
+#### Fix #4 — `ALLOWED_ORIGINS` configurable (CSRF)
+
+`_ALLOWED_ORIGINS` était hardcodé à `127.0.0.1:8000` / `localhost:8000`.
+Override possible via env var `ALLOWED_ORIGINS` (CSV) pour les cas port
+custom ou reverse proxy. Les defaults restent en fallback (jamais retirés).
+
+- **`backend/main.py`** : `_load_allowed_origins()` lit l'env var au boot,
+  trim trailing `/`, fusionne avec les defaults.
+- **`tests/test_security.py`** : 4 nouveaux tests `TestAllowedOriginsEnvOverride`
+  (default sans env, ajout d'1 origine, CSV multiple, vide ignoré).
+- **README.md** : section documentée avec exemple PowerShell.
+
+#### Fix #6 — Logs explicites dans `company_portals.py`
+
+Les 8 `except Exception: return []` silencieux étaient injoignables au
+diagnostic : un portail KO devenait "0 offres trouvées" sans plus.
+
+- **`backend/scrapers/company_portals.py`** : chaque except remplace le
+  silence par `logger.warning(...)` ou `logger.debug(...)` avec contexte
+  (slug, tenant, company_name, status code, url, err). Couverts :
+  Workable, Lever, Greenhouse (+fallback BS parse en `debug`), Taleez,
+  Workday, Playwright, generic career page.
+
+#### Fix #7 — README à jour
+
+- "130 tests, ~3s" → **371 tests, ~15-26s**
+- "Tailwind via CDN" → "Tailwind v3 vendoré + HTMX 2.0.4 vendoré"
+- "HTMX 2.0.4 vient encore d'unpkg" → supprimé, remplacé par bloc
+  unifié "Tailwind + HTMX vendorés localement"
+- Section CSRF documentée avec exemple `$env:ALLOWED_ORIGINS`
+- `bandit` dans `requirements.txt` mentionné
+
+#### Bilan
+
+- `pytest tests/ -q` en venv propre : **371 passed in ~15s** (367 → 371 = +4
+  tests env var CSRF + 2 tests rollback ; -2 net car le test pré-existant
+  trompeur n'a pas été supprimé mais coexiste).
+- `bandit -r backend cli.py` en venv : **0 issues, exit 0**.
+- E2E : app boot OK, `/api/stats` répond avec les valeurs prod identiques,
+  `_load_allowed_origins()` testée live (avec/sans env var).
+
 ### Docs — Sprint qualité (18 mai 2026) : audit staff-engineer — P1.6 (rationale `# nosec B608`)
 
 Les 12 occurrences de `# nosec B608` (f-string SQL) avaient déjà un commentaire

@@ -108,6 +108,52 @@ class TestCSRFOriginMiddleware:
         assert r.status_code == 200
 
 
+class TestAllowedOriginsEnvOverride:
+    """`ALLOWED_ORIGINS` env var doit pouvoir étendre les origins acceptées
+    (cas: app derrière reverse proxy ou sur port custom)."""
+
+    def test_default_origins_without_env_var(self, monkeypatch):
+        monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+        from backend.main import _load_allowed_origins
+        origins = _load_allowed_origins()
+        assert "http://127.0.0.1:8000" in origins
+        assert "http://localhost:8000" in origins
+        assert len(origins) == 2
+
+    def test_env_var_adds_extra_origin(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://127.0.0.1:8001")
+        from backend.main import _load_allowed_origins
+        origins = _load_allowed_origins()
+        # Defaults toujours présents (jamais retirés)
+        assert "http://127.0.0.1:8000" in origins
+        assert "http://localhost:8000" in origins
+        # Origine custom ajoutée
+        assert "http://127.0.0.1:8001" in origins
+
+    def test_env_var_csv_multiple_origins(self, monkeypatch):
+        monkeypatch.setenv(
+            "ALLOWED_ORIGINS",
+            "https://proxy.local, http://127.0.0.1:9000 , https://other.local/",
+        )
+        from backend.main import _load_allowed_origins
+        origins = _load_allowed_origins()
+        assert "https://proxy.local" in origins
+        assert "http://127.0.0.1:9000" in origins
+        # Trailing `/` stripé
+        assert "https://other.local" in origins
+        assert "https://other.local/" not in origins
+
+    def test_env_var_empty_ignored(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_ORIGINS", "   ")
+        from backend.main import _load_allowed_origins
+        origins = _load_allowed_origins()
+        # Pas de crash, defaults seulement
+        assert origins == {
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        }
+
+
 class TestEnumValidation:
     """Audit user finding #2 : les routes POST/PATCH acceptaient des valeurs hors enum."""
 

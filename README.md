@@ -3,8 +3,8 @@
 App web locale pour scraper, scorer et suivre les offres d'alternance "AI Engineer"
 en France, alignées avec le programme OpenClassrooms AI Engineer.
 
-**Stack** : Python 3.10+ · FastAPI · SQLite · Jinja2 · HTMX · Tailwind via CDN.
-Aucun Node.js, aucun build step, aucune clé API LLM.
+**Stack** : Python 3.10+ · FastAPI · SQLite · Jinja2 · HTMX (vendoré) · Tailwind v3 (vendoré).
+Aucun Node.js, aucun build step, aucune clé API LLM, **aucune dépendance CDN runtime**.
 
 ## Quickstart
 
@@ -32,7 +32,7 @@ $env:PYTHONIOENCODING="utf-8"; python -m backend.migrate_xlsx
 ```
 backend/     Code FastAPI + Jinja + SQLite
 cli.py       Commandes : scrape, apply-scores, export-batch, check-alive
-tests/       pytest (130 tests, ~3s, sans network)
+tests/       pytest (367 tests, ~15-26s, sans network)
 data/        SQLite + batches JSON + scrapes (gitignored)
 docs/        ARCHITECTURE.md, CRITERIA.md (grille scoring), SOURCES.md (sites scrapés)
 reference/   PDF du programme OC + pages PNG
@@ -55,14 +55,17 @@ de toute façon à chaque scrape — le batch LLM est juste un raffinement optio
 
 ## Qualité du code
 
+`bandit` et `pytest` sont déclarés dans `requirements.txt`/`.lock` — installés
+par le `pip install -r requirements.lock` ci-dessus.
+
 ```powershell
 # Tests
 $env:PYTHONIOENCODING="utf-8"; python -m pytest tests/ -q
-# → 130 passed in ~3s
+# → 367 passed in ~15-26s (selon machine)
 
-# Sécurité (statique)
+# Sécurité (statique) — bandit pinné dans requirements
 python -m bandit -r backend cli.py
-# → 0 issues (faux positifs B608 annotés `# nosec B608` au cas par cas)
+# → 0 issues (les `# nosec B608` sont commentés `# SAFE (B608) : ...` au-dessus)
 
 # Smoke test (import OK + nb routes)
 python -c "from backend.main import app; print('OK', len(app.routes), 'routes')"
@@ -88,15 +91,30 @@ Certains choix volontaires :
   pas OK en remote. Le middleware CSRF (`CSRFOriginMiddleware`) bloque déjà les
   requêtes mutantes depuis une origin externe.
 
-- **Tailwind vendoré localement** : le bundle Tailwind v3.4.17 est servi via
-  `backend/static/tailwind-3.4.17.min.js` avec SRI sha384. Aucune dépendance
-  réseau au runtime. HTMX 2.0.4 vient encore d'unpkg (pinné avec SRI).
-  Pour mettre à jour Tailwind :
+- **Tailwind + HTMX vendorés localement** : les 2 bundles sont servis via
+  `backend/static/` avec SRI sha384. Plus aucune dépendance CDN au runtime —
+  l'app marche en mode avion / firewall corporate / unpkg down.
+  - `backend/static/tailwind-3.4.17.min.js` (~407 KB)
+  - `backend/static/htmx-2.0.4.min.js` (~50 KB)
+
+  Pour mettre à jour une lib :
 
   ```powershell
-  curl -o backend/static/tailwind-<version>.min.js https://cdn.tailwindcss.com/<version>
-  python -c "import hashlib, base64; d=open('backend/static/tailwind-<version>.min.js','rb').read(); print('sha384-'+base64.b64encode(hashlib.sha384(d).digest()).decode())"
+  curl -o backend/static/<lib>-<version>.min.js https://unpkg.com/<lib>@<version>
+  python -c "import hashlib, base64; d=open('backend/static/<lib>-<version>.min.js','rb').read(); print('sha384-'+base64.b64encode(hashlib.sha384(d).digest()).decode())"
   # → mettre à jour le src + integrity dans backend/templates/base.html
+  ```
+
+- **CSRF middleware lié au port** : `CSRFOriginMiddleware` (`backend/main.py`)
+  filtre les Origin/Referer des requêtes mutantes. Origins acceptées par
+  défaut : `http://127.0.0.1:8000` et `http://localhost:8000`. Si tu lances
+  l'app sur un autre port (`uvicorn --port 8001`) ou derrière un reverse proxy,
+  les POST navigateur seront bloqués → override via la variable d'environnement
+  `ALLOWED_ORIGINS` (CSV) :
+
+  ```powershell
+  $env:ALLOWED_ORIGINS="http://127.0.0.1:8001,https://mon-proxy.local"
+  python -m backend
   ```
 
 - **Credentials France Travail dans `.env`** (gitignored). Si tu publies sur

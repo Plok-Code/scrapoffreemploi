@@ -95,11 +95,33 @@ templates.env.filters["safe_href"] = _safe_href
 # --- CSRF light : check Origin/Referer sur les routes mutantes ---
 
 # Origins acceptés pour les requêtes mutantes (POST/PATCH/PUT/DELETE).
-# L'app bind sur 127.0.0.1:8000, donc seules ces origins doivent valider.
-_ALLOWED_ORIGINS = {
+# Défaut : `127.0.0.1:8000` + `localhost:8000` (match le bind d'`__main__.py`).
+#
+# Pour lancer sur un autre port (ex `uvicorn --port 8001`) ou derrière un
+# reverse proxy, exporter la variable d'environnement `ALLOWED_ORIGINS` :
+#     $env:ALLOWED_ORIGINS="http://127.0.0.1:8001,https://proxy.local"
+# Les origins en plus de l'env var s'AJOUTENT aux defaults (les defaults ne
+# sont jamais retirés — limite de surface : un override ne casse jamais
+# l'usage local 127.0.0.1:8000).
+
+import os as _os
+
+_DEFAULT_ALLOWED_ORIGINS = {
     "http://127.0.0.1:8000",
     "http://localhost:8000",
 }
+
+
+def _load_allowed_origins() -> set[str]:
+    """Lit `ALLOWED_ORIGINS` (CSV) et fusionne avec les defaults."""
+    extra = _os.environ.get("ALLOWED_ORIGINS", "").strip()
+    if not extra:
+        return set(_DEFAULT_ALLOWED_ORIGINS)
+    extras = {o.strip().rstrip("/") for o in extra.split(",") if o.strip()}
+    return _DEFAULT_ALLOWED_ORIGINS | extras
+
+
+_ALLOWED_ORIGINS = _load_allowed_origins()
 
 
 class CSRFOriginMiddleware(BaseHTTPMiddleware):

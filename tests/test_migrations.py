@@ -196,6 +196,95 @@ class TestMigrationFailureRollback:
         assert 1 in applied
         assert 2 not in applied
 
+    def test_multi_ddl_with_error_in_middle_rolls_back_partial(
+        self, temp_db, isolated_migrations
+    ):
+        """Le test critique du bug rollback (audit user, 19 mai 2026).
+
+        Avant le fix `autocommit=False`, `Connection.executescript()` émettait
+        un COMMIT implicite avant de lancer le script, ce qui rendait le
+        rollback impossible : les CREATE TABLE exécutés avant l'erreur SQL
+        restaient persistés.
+
+        Ici : une migration enchaîne 2 CREATE TABLE valides, puis du SQL
+        invalide. Vérifie qu'AUCUNE des 2 premières tables ne persiste
+        après le rollback. Si ce test échoue, la transaction de migration
+        n'est PAS atomique → risque de DB à moitié migrée.
+        """
+        (isolated_migrations / "001_multi_ddl_broken.sql").write_text(
+            """
+            CREATE TABLE t_part1 (id INTEGER);
+            CREATE TABLE t_part2 (id INTEGER);
+            CRAP_INVALID_SQL_BOOM;
+            CREATE TABLE t_part3 (id INTEGER);
+            """,
+            encoding="utf-8",
+        )
+
+        from backend._migrations import apply_migrations, current_schema_version
+        with pytest.raises(sqlite3.OperationalError):
+            apply_migrations()
+
+        # Aucune migration appliquée (schema_migrations vide en tant que tx)
+        assert current_schema_version() == 0
+
+        # Aucune des 3 tables ne doit persister (rollback complet)
+        conn = sqlite3.connect(temp_db)
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.close()
+        for t in ("t_part1", "t_part2", "t_part3"):
+            assert t not in tables, (
+                f"BUG rollback : table {t!r} persiste après l'erreur SQL. "
+                f"Tables présentes : {tables}. "
+                f"Cause probable : Connection.executescript() en mode "
+                f"LEGACY_TRANSACTION_CONTROL fait un COMMIT implicite. "
+                f"Fix : utiliser sqlite3.connect(..., autocommit=False) "
+                f"pour la connexion de migration."
+            )
+
+    def test_multi_migration_atomicity(self, temp_db, isolated_migrations):
+        """v1 OK (commited) → v2 multi-DDL avec erreur (rollback complet).
+
+        Vérifie que v1 reste appliquée et que les DDL de v2 (avant l'erreur)
+        ne fuient PAS dans la DB.
+        """
+        (isolated_migrations / "001_ok.sql").write_text(
+            "CREATE TABLE v1_persisted (id INTEGER);", encoding="utf-8"
+        )
+        (isolated_migrations / "002_partial.sql").write_text(
+            """
+            CREATE TABLE v2_should_not_exist (id INTEGER);
+            CREATE TABLE v2_neither (id INTEGER);
+            BROKEN_SYNTAX_HERE;
+            """,
+            encoding="utf-8",
+        )
+
+        from backend._migrations import apply_migrations, current_schema_version
+        with pytest.raises(sqlite3.OperationalError):
+            apply_migrations()
+
+        # v1 OK
+        assert current_schema_version() == 1
+        conn = sqlite3.connect(temp_db)
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.close()
+        # v1 persistée
+        assert "v1_persisted" in tables
+        # v2 entièrement rollbackée
+        assert "v2_should_not_exist" not in tables
+        assert "v2_neither" not in tables
+
 
 class TestSchemaMigrationsTable:
     """La table de tracking elle-même."""
